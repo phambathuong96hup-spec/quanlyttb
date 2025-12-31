@@ -224,50 +224,59 @@ def main():
 
     # --- 4. NHẬP LIỆU TỪ EXCEL ---
     elif choice == "Nhập liệu từ Excel":
-        st.header("📥 Import dữ liệu từ file CSV của bạn")
-        st.markdown("Sử dụng file `...PL TTB.csv` bạn đã cung cấp.")
+        st.header("📥 Import dữ liệu từ file Excel")
+        st.markdown("Hỗ trợ file `.xlsx`. Hệ thống sẽ tự động đọc từ dòng tiêu đề (thường là dòng 5).")
         
-        uploaded_file = st.file_uploader("Chọn file CSV", type=['csv'])
+        # Sửa: Cho phép upload file xlsx
+        uploaded_file = st.file_uploader("Chọn file Excel kế hoạch", type=['xlsx', 'xls'])
+        
         if uploaded_file is not None:
             try:
-                # Đọc file CSV, bỏ qua các dòng tiêu đề rác ở trên (header=4 dựa trên file mẫu)
-                df_upload = pd.read_csv(uploaded_file, header=4) 
+                # Sửa: Dùng read_excel thay vì read_csv
+                # header=4 nghĩa là lấy dòng thứ 5 làm tiêu đề (vì Python đếm từ 0)
+                # Bạn có thể chỉnh số 4 này nếu file Excel của bạn thay đổi cấu trúc
+                df_upload = pd.read_excel(uploaded_file, header=4, engine='openpyxl')
                 
-                # Mapping cột (Dựa trên cấu trúc file của bạn)
-                # Cần kiểm tra kỹ tên cột trong file CSV thực tế
-                st.write("Dữ liệu xem trước:")
+                st.write("Dữ liệu xem trước (5 dòng đầu):")
                 st.dataframe(df_upload.head())
                 
                 if st.button("Tiến hành Import vào Database"):
                     count = 0
                     for index, row in df_upload.iterrows():
-                        # Bỏ qua các dòng tiêu đề phụ lặp lại
-                        if str(row['Tên Thiết bị']) == "Tên Thiết bị" or pd.isna(row['Tên Thiết bị']):
+                        # Lấy tên cột chính xác từ file Excel của bạn
+                        ten_thiet_bi = row.get('Tên Thiết bị')
+                        
+                        # Bỏ qua dòng trống hoặc dòng tiêu đề lặp lại
+                        if pd.isna(ten_thiet_bi) or str(ten_thiet_bi).strip() == "Tên Thiết bị":
                             continue
                             
-                        # Xử lý ngày tháng (File của bạn có nhiều định dạng 2026-06-27 hoặc 14/02/2028)
-                        def parse_date(date_str):
-                            if pd.isna(date_str): return None
+                        # Hàm xử lý ngày tháng (để tránh lỗi khi Excel trả về datetime object hoặc string)
+                        def parse_date(date_val):
+                            if pd.isna(date_val): return None
+                            if isinstance(date_val, datetime): return date_val.date()
+                            
                             formats = ['%Y-%m-%d', '%d/%m/%Y', '%Y/%m/%d']
                             for fmt in formats:
                                 try:
-                                    return datetime.strptime(str(date_str).strip(), fmt).date()
+                                    return datetime.strptime(str(date_val).strip(), fmt).date()
                                 except:
                                     pass
-                            return datetime.now().date() # Fallback
+                            return datetime.now().date() # Ngày mặc định nếu lỗi
 
+                        # Thêm vào database
                         add_device(
-                            ten=row.get('Tên Thiết bị', ''),
+                            ten=ten_thiet_bi,
                             khoa=row.get('Nơi đặt thiết bị', ''),
                             model=row.get('Model', ''),
                             serial=row.get('Seri Máy', ''),
                             chu_ky=row.get('Thời gian thực hiện lại/ năm.', '1 Năm/ Lần'),
                             ngay_gan_nhat=parse_date(row.get('Ngày cấp/ Ngày Đăng kiểm')),
-                            han_tiep_theo=parse_date(row.get('Thời hạn cấp lại/ Hạn đăng \nkiểm')), # Lưu ý ký tự xuống dòng trong tên cột
+                            han_tiep_theo=parse_date(row.get('Thời hạn cấp lại/ Hạn đăng \nkiểm')), # Lưu ý tên cột có xuống dòng
                             nguoi_pt=row.get('Người chịu trách nhiệm chính ', '')
                         )
                         count += 1
-                    st.success(f"Đã import thành công {count} thiết bị!")
+                    st.success(f"Đã import thành công {count} thiết bị từ file Excel!")
+                    st.balloons() # Hiệu ứng chúc mừng
             except Exception as e:
                 st.error(f"Lỗi khi đọc file: {e}")
 
