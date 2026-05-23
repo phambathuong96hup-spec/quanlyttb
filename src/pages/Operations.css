@@ -459,36 +459,6 @@
   font-weight: 760;
 }
 
-.ops-sla-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
-  margin-bottom: 14px;
-}
-
-.ops-sla-grid div {
-  padding: 12px;
-  border: 1px solid #dbe5ee;
-  border-radius: 8px;
-  background: #fbfdfe;
-}
-
-.ops-sla-grid strong {
-  display: block;
-  color: #0f172a;
-  font-size: 1.3rem;
-  line-height: 1;
-  font-weight: 850;
-}
-
-.ops-sla-grid span {
-  display: block;
-  margin-top: 5px;
-  color: var(--text-secondary);
-  font-size: 0.74rem;
-  font-weight: 760;
-}
-
 .ops-cost-form {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -505,36 +475,61 @@
 }
 
 .ops-qr-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.ops-qr-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  color: var(--text-primary);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.ops-qr-workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(180px, 220px) minmax(0, 1fr);
   gap: 16px;
   align-items: start;
 }
 
-.ops-qr-layout select {
-  grid-column: 1 / -1;
-}
-
-.ops-qr-box {
+.ops-qr-card {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 14px;
+  min-height: 204px;
+  padding: 20px;
   border: 1px solid #dbe5ee;
   border-radius: 8px;
-  background: #ffffff;
+  background:
+    linear-gradient(180deg, #ffffff 0%, #f8fbfd 100%);
 }
 
 .ops-qr-info {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid #dbe5ee;
+  border-radius: 8px;
+  background: #fbfdfe;
+}
+
+.ops-qr-meta {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .ops-qr-info strong {
   color: var(--text-primary);
   font-size: 1rem;
+  line-height: 1.35;
 }
 
 .ops-qr-info span,
@@ -546,6 +541,7 @@
 .ops-qr-info code {
   display: block;
   overflow-wrap: anywhere;
+  word-break: break-word;
   padding: 8px;
   border-radius: 8px;
   background: #f1f5f9;
@@ -619,13 +615,8 @@
     font-size: 0.64rem;
   }
 
-  .ops-sla-grid,
   .ops-cost-form,
-  .ops-qr-layout {
+  .ops-qr-workspace {
     grid-template-columns: 1fr;
-  }
-
-  .ops-qr-layout select {
-    grid-column: auto;
   }
 }

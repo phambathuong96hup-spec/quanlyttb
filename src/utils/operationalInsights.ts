@@ -41,22 +41,6 @@ export interface InspectionTask extends InspectionItem {
   updatedAt: string;
 }
 
-export interface SlaDepartmentSummary {
-  department: string;
-  activeCount: number;
-  completedCount: number;
-  averageActiveAge: number;
-}
-
-export interface SlaSummary {
-  activeCount: number;
-  completedCount: number;
-  overSevenDays: number;
-  overFourteenDays: number;
-  averageActiveAge: number;
-  byDepartment: SlaDepartmentSummary[];
-}
-
 export interface CostEntry {
   id: string;
   deviceId: string;
@@ -102,11 +86,6 @@ const daysFromToday = (dateText: string, today: Date) => {
 };
 
 const normalizeStatus = (status: string) => removeVietnameseTones(status.toLowerCase());
-
-const isDoneStatus = (status: string) => {
-  const normalized = normalizeStatus(status);
-  return normalized.includes('hoan') || normalized.includes('tu choi') || normalized.includes('huy');
-};
 
 const isSentOrApproved = (status: string) => {
   const normalized = normalizeStatus(status);
@@ -287,55 +266,6 @@ export const buildInspectionTasks = (
         updatedAt: override?.updatedAt || '',
       };
     });
-};
-
-const getDeviceDepartment = (devices: DeviceData[], deviceId: string) => {
-  return cleanText(devices.find(device => device.id === deviceId)?.department, 'Không rõ');
-};
-
-export const getRepairAgeDays = (repair: RepairData, today = new Date()) => {
-  const parsed = parseFlexibleDate(repair.rowId);
-  if (!parsed) return 0;
-  return Math.max(0, differenceInDays(parsed, today));
-};
-
-export const buildSlaSummary = (repairs: RepairData[], devices: DeviceData[], today = new Date()): SlaSummary => {
-  const activeRepairs = repairs.filter(repair => !isDoneStatus(repair.status));
-  const completedRepairs = repairs.filter(repair => isDoneStatus(repair.status));
-  const activeAges = activeRepairs.map(repair => getRepairAgeDays(repair, today));
-  const averageActiveAge = activeAges.length
-    ? Math.round(activeAges.reduce((sum, age) => sum + age, 0) / activeAges.length)
-    : 0;
-
-  const departmentMap = new Map<string, { activeAges: number[]; completedCount: number }>();
-  repairs.forEach(repair => {
-    const department = getDeviceDepartment(devices, repair.deviceId);
-    const current = departmentMap.get(department) || { activeAges: [], completedCount: 0 };
-    if (isDoneStatus(repair.status)) {
-      current.completedCount += 1;
-    } else {
-      current.activeAges.push(getRepairAgeDays(repair, today));
-    }
-    departmentMap.set(department, current);
-  });
-
-  const byDepartment = Array.from(departmentMap.entries()).map(([department, value]) => ({
-    department,
-    activeCount: value.activeAges.length,
-    completedCount: value.completedCount,
-    averageActiveAge: value.activeAges.length
-      ? Math.round(value.activeAges.reduce((sum, age) => sum + age, 0) / value.activeAges.length)
-      : 0,
-  })).sort((a, b) => b.activeCount - a.activeCount || b.averageActiveAge - a.averageActiveAge);
-
-  return {
-    activeCount: activeRepairs.length,
-    completedCount: completedRepairs.length,
-    overSevenDays: activeAges.filter(age => age > 7).length,
-    overFourteenDays: activeAges.filter(age => age > 14).length,
-    averageActiveAge,
-    byDepartment,
-  };
 };
 
 const eventSortValue = (dateText: string) => parseFlexibleDate(dateText)?.getTime() || 0;

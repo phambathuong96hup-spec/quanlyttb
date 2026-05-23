@@ -451,17 +451,23 @@ const DeviceList: React.FC = () => {
       {printingDevices.length > 0 && (
         <div id="print-area">
           {printingDevices.map((device, index) => {
-            // Đổi mã QR thành đường dẫn URL trỏ thẳng vào web (Device Profile)
-            // Khi điện thoại quét URL, nó sẽ không search Google mà mở Trình duyệt web.
             const qrUrl = `${window.location.origin}${import.meta.env.BASE_URL}devices/${encodeURIComponent(device.id)}`;
+            const deviceCodes = splitDeviceCodes(device.id);
+            const visibleCodes = (deviceCodes.length > 0 ? deviceCodes : [String(device.id || '')]).slice(0, 2);
+            const hiddenCodeCount = Math.max(0, deviceCodes.length - visibleCodes.length);
             return (
-            <div className="print-page" key={`print-${device.id}-${index}`}>
-              <h2>TTYT khu vực Thanh Ba</h2>
-              <p className="subtitle">Hệ thống QLTTB</p>
-              <QRCodeSVG value={qrUrl} size={120} level="M" />
-              <h3>{device.id}</h3>
-              <p className="device-name">{device.name}</p>
-              <p className="device-dept">{device.department}</p>
+            <div className="print-page print-qr-card" key={`print-${device.id}-${index}`}>
+              <div className="print-qr-org">TTYT khu vực Thanh Ba</div>
+              <div className="print-qr-subtitle">Hệ thống QLTTB</div>
+              <QRCodeSVG value={qrUrl} size={96} level="M" />
+              <div className="print-qr-code-list">
+                {visibleCodes.map((code, codeIndex) => (
+                  <span key={`${code}-${codeIndex}`}>{code}</span>
+                ))}
+                {hiddenCodeCount > 0 && <span className="print-qr-hidden-count">+{hiddenCodeCount} mã</span>}
+              </div>
+              <div className="print-qr-name">{device.name}</div>
+              <div className="print-qr-department">{device.department}</div>
             </div>
             );
           })}

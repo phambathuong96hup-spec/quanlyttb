@@ -31,10 +31,8 @@ import {
   buildAuditEvents,
   buildInspectionItems,
   buildInspectionTasks,
-  buildSlaSummary,
   formatCurrencyVnd,
   getCalendarDays,
-  getRepairAgeDays,
   getWorkflowLabel,
   type AuditEventType,
   type ComplianceStatusKind,
@@ -47,7 +45,7 @@ import {
 import { isRepairActive } from '../utils/statusUtils';
 import './Operations.css';
 
-type OperationsTab = 'calendar' | 'tasks' | 'audit' | 'sla' | 'qr-import';
+type OperationsTab = 'calendar' | 'tasks' | 'audit' | 'costs' | 'qr-import';
 
 interface CostFormState {
   deviceId: string;
@@ -76,7 +74,7 @@ const tabs: Array<{ id: OperationsTab; label: string; icon: React.ElementType }>
   { id: 'calendar', label: 'Lịch kiểm định', icon: CalendarDays },
   { id: 'tasks', label: 'Nhắc việc', icon: ClipboardCheck },
   { id: 'audit', label: 'Lịch sử', icon: History },
-  { id: 'sla', label: 'SLA & chi phí', icon: ReceiptText },
+  { id: 'costs', label: 'Chi phí', icon: ReceiptText },
   { id: 'qr-import', label: 'QR & Import', icon: QrCode },
 ];
 
@@ -185,7 +183,10 @@ const Operations: React.FC = () => {
     () => buildInspectionTasks(inspectionItems, workflowOverrides),
     [inspectionItems, workflowOverrides]
   );
-  const slaSummary = useMemo(() => buildSlaSummary(repairs, devices, today), [devices, repairs, today]);
+  const activeRepairCount = useMemo(
+    () => repairs.filter(repair => isRepairActive(repair.status)).length,
+    [repairs]
+  );
   const auditEvents = useMemo(
     () => buildAuditEvents({ devices, repairs, transfers, inspectionTasks, costEntries }),
     [costEntries, devices, inspectionTasks, repairs, transfers]
@@ -223,18 +224,6 @@ const Operations: React.FC = () => {
       return parsed && parsed.getFullYear() === calendarMonth.getFullYear() && parsed.getMonth() === calendarMonth.getMonth();
     });
   }, [calendarMonth, inspectionItems]);
-
-  const activeRepairs = useMemo(() => {
-    return repairs
-      .filter(repair => isRepairActive(repair.status))
-      .map(repair => ({
-        ...repair,
-        ageDays: getRepairAgeDays(repair, today),
-        deviceName: devices.find(device => device.id === repair.deviceId)?.name || repair.deviceId,
-        department: devices.find(device => device.id === repair.deviceId)?.department || 'Không rõ',
-      }))
-      .sort((a, b) => b.ageDays - a.ageDays);
-  }, [devices, repairs, today]);
 
   const updateWorkflow = (taskKey: string, patch: Partial<WorkflowOverrides[string]>) => {
     setWorkflowOverrides(prev => {
@@ -427,95 +416,47 @@ const Operations: React.FC = () => {
     </section>
   );
 
-  const renderSlaTab = () => (
-    <div className="ops-split">
-      <section className="ops-panel">
-        <div className="ops-section-header">
-          <div>
-            <h2>Báo cáo SLA sửa chữa</h2>
-            <p>Theo dõi tuổi yêu cầu đang mở và khối lượng theo khoa/phòng.</p>
-          </div>
-          <Badge variant={slaSummary.overSevenDays > 0 ? 'warning' : 'success'}>{slaSummary.overSevenDays} quá 7 ngày</Badge>
+  const renderCostsTab = () => (
+    <section className="ops-panel ops-cost-panel">
+      <div className="ops-section-header">
+        <div>
+          <h2>Chi phí sửa chữa/bảo trì</h2>
+          <p>Ghi nhanh chi phí để đối chiếu theo thiết bị và nhà cung cấp.</p>
         </div>
-        <div className="ops-sla-grid">
-          <div><strong>{slaSummary.activeCount}</strong><span>Đang mở</span></div>
-          <div><strong>{slaSummary.completedCount}</strong><span>Đã hoàn thành</span></div>
-          <div><strong>{slaSummary.averageActiveAge}</strong><span>Ngày TB đang mở</span></div>
-          <div><strong>{slaSummary.overFourteenDays}</strong><span>Quá 14 ngày</span></div>
-        </div>
-        <Table className="ops-table compact">
-          <TableHead>
-            <TableRow>
-              <TableHeader>Khoa/phòng</TableHeader>
-              <TableHeader>Đang mở</TableHeader>
-              <TableHeader>Đã xong</TableHeader>
-              <TableHeader>Tuổi TB</TableHeader>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {slaSummary.byDepartment.length === 0 ? (
-              <TableRow><TableCell colSpan={4} style={{ textAlign: 'center', padding: '2rem' }}>Chưa có dữ liệu sửa chữa.</TableCell></TableRow>
-            ) : slaSummary.byDepartment.map(row => (
-              <TableRow key={row.department}>
-                <TableCell>{row.department}</TableCell>
-                <TableCell>{row.activeCount}</TableCell>
-                <TableCell>{row.completedCount}</TableCell>
-                <TableCell>{row.averageActiveAge} ngày</TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-        <div className="ops-open-repairs">
-          {activeRepairs.slice(0, 8).map(repair => (
-            <div key={`${repair.rowId}-${repair.deviceId}`} className="ops-open-repair">
-              <strong>{repair.deviceName}</strong>
-              <span>{repair.department} · {repair.ageDays} ngày · {repair.status}</span>
+        <Badge variant="success">{formatCurrencyVnd(summary.totalCost)}</Badge>
+      </div>
+      <div className="ops-cost-form">
+        <select value={costForm.deviceId} onChange={event => setCostForm(prev => ({ ...prev, deviceId: event.target.value }))}>
+          <option value="">Chọn thiết bị</option>
+          {devices.map((device, index) => <option key={`${device.id}-${index}`} value={device.id}>{device.id} - {device.name}</option>)}
+        </select>
+        <input type="date" value={costForm.date} onChange={event => setCostForm(prev => ({ ...prev, date: event.target.value }))} />
+        <input value={costForm.amount} onChange={event => setCostForm(prev => ({ ...prev, amount: event.target.value }))} placeholder="Chi phí" inputMode="numeric" />
+        <select value={costForm.category} onChange={event => setCostForm(prev => ({ ...prev, category: event.target.value }))}>
+          <option>Sửa chữa</option>
+          <option>Bảo trì</option>
+          <option>Kiểm định</option>
+          <option>Vật tư thay thế</option>
+        </select>
+        <input value={costForm.vendor} onChange={event => setCostForm(prev => ({ ...prev, vendor: event.target.value }))} placeholder="Đơn vị thực hiện" />
+        <input value={costForm.note} onChange={event => setCostForm(prev => ({ ...prev, note: event.target.value }))} placeholder="Ghi chú" />
+        <Button icon={<ReceiptText size={16} />} onClick={handleAddCost}>Thêm chi phí</Button>
+      </div>
+      <div className="ops-cost-list">
+        {costEntries.length === 0 ? (
+          <div className="ops-empty">Chưa có chi phí nào được ghi nhận.</div>
+        ) : costEntries.map(entry => (
+          <div key={entry.id} className="ops-cost-item">
+            <div>
+              <strong>{formatCurrencyVnd(entry.amount)}</strong>
+              <span>{entry.deviceId} · {entry.category} · {entry.vendor}</span>
+              <small>{entry.date} · {entry.note}</small>
             </div>
-          ))}
-        </div>
-      </section>
-
-      <section className="ops-panel">
-        <div className="ops-section-header">
-          <div>
-            <h2>Chi phí sửa chữa/bảo trì</h2>
-            <p>Ghi nhanh chi phí để đối chiếu theo thiết bị và nhà cung cấp.</p>
+            <Button size="sm" variant="secondary" onClick={() => handleDeleteCost(entry.id)}>Xóa</Button>
           </div>
-          <Badge variant="success">{formatCurrencyVnd(summary.totalCost)}</Badge>
-        </div>
-        <div className="ops-cost-form">
-          <select value={costForm.deviceId} onChange={event => setCostForm(prev => ({ ...prev, deviceId: event.target.value }))}>
-            <option value="">Chọn thiết bị</option>
-            {devices.map((device, index) => <option key={`${device.id}-${index}`} value={device.id}>{device.id} - {device.name}</option>)}
-          </select>
-          <input type="date" value={costForm.date} onChange={event => setCostForm(prev => ({ ...prev, date: event.target.value }))} />
-          <input value={costForm.amount} onChange={event => setCostForm(prev => ({ ...prev, amount: event.target.value }))} placeholder="Chi phí" inputMode="numeric" />
-          <select value={costForm.category} onChange={event => setCostForm(prev => ({ ...prev, category: event.target.value }))}>
-            <option>Sửa chữa</option>
-            <option>Bảo trì</option>
-            <option>Kiểm định</option>
-            <option>Vật tư thay thế</option>
-          </select>
-          <input value={costForm.vendor} onChange={event => setCostForm(prev => ({ ...prev, vendor: event.target.value }))} placeholder="Đơn vị thực hiện" />
-          <input value={costForm.note} onChange={event => setCostForm(prev => ({ ...prev, note: event.target.value }))} placeholder="Ghi chú" />
-          <Button icon={<ReceiptText size={16} />} onClick={handleAddCost}>Thêm chi phí</Button>
-        </div>
-        <div className="ops-cost-list">
-          {costEntries.length === 0 ? (
-            <div className="ops-empty">Chưa có chi phí nào được ghi nhận.</div>
-          ) : costEntries.map(entry => (
-            <div key={entry.id} className="ops-cost-item">
-              <div>
-                <strong>{formatCurrencyVnd(entry.amount)}</strong>
-                <span>{entry.deviceId} · {entry.category} · {entry.vendor}</span>
-                <small>{entry.date} · {entry.note}</small>
-              </div>
-              <Button size="sm" variant="secondary" onClick={() => handleDeleteCost(entry.id)}>Xóa</Button>
-            </div>
-          ))}
-        </div>
-      </section>
-    </div>
+        ))}
+      </div>
+    </section>
   );
 
   const renderQrImportTab = () => {
@@ -531,21 +472,28 @@ const Operations: React.FC = () => {
             <QrCode size={30} className="ops-muted-icon" />
           </div>
           <div className="ops-qr-layout">
-            <select value={selectedDevice?.id || ''} onChange={event => setSelectedDeviceId(event.target.value)}>
-              {devices.map((device, index) => <option key={`${device.id}-${index}`} value={device.id}>{device.id} - {device.name}</option>)}
-            </select>
-            <div className="ops-qr-box">
-              {selectedDevice && <QRCodeSVG value={deviceUrl} size={160} />}
-            </div>
+            <label className="ops-qr-picker">
+              <span>Thiết bị</span>
+              <select value={selectedDevice?.id || ''} onChange={event => setSelectedDeviceId(event.target.value)}>
+                {devices.map((device, index) => <option key={`${device.id}-${index}`} value={device.id}>{device.id} - {device.name}</option>)}
+              </select>
+            </label>
             {selectedDevice && (
-              <div className="ops-qr-info">
-                <strong>{selectedDevice.name}</strong>
-                <span>{selectedDevice.id} · {selectedDevice.department}</span>
-                <code>{deviceUrl}</code>
-                <div className="ops-qr-actions">
-                  <Button size="sm" onClick={() => navigate(profilePath)}>Mở hồ sơ</Button>
-                  <Button size="sm" variant="secondary" onClick={() => navigate(`/requests?type=repair&device=${encodeURIComponent(selectedDevice.id)}`)}>Báo hỏng</Button>
-                  <Button size="sm" variant="secondary" onClick={() => navigate('/requests?type=transfer')}>Điều chuyển</Button>
+              <div className="ops-qr-workspace">
+                <div className="ops-qr-card">
+                  <QRCodeSVG value={deviceUrl} size={150} />
+                </div>
+                <div className="ops-qr-info">
+                  <div className="ops-qr-meta">
+                    <strong>{selectedDevice.name}</strong>
+                    <span>{selectedDevice.id} · {selectedDevice.department}</span>
+                  </div>
+                  <code>{deviceUrl}</code>
+                  <div className="ops-qr-actions">
+                    <Button size="sm" onClick={() => navigate(profilePath)}>Mở hồ sơ</Button>
+                    <Button size="sm" variant="secondary" onClick={() => navigate(`/requests?type=repair&device=${encodeURIComponent(selectedDevice.id)}`)}>Báo hỏng</Button>
+                    <Button size="sm" variant="secondary" onClick={() => navigate('/requests?type=transfer')}>Điều chuyển</Button>
+                  </div>
                 </div>
               </div>
             )}
@@ -604,7 +552,7 @@ const Operations: React.FC = () => {
       <div className="operations-header">
         <div>
           <h1><ClipboardCheck size={30} /> Điều hành công việc</h1>
-          <p>Lịch kiểm định, nhắc việc, audit log, SLA, chi phí, QR và kiểm tra import nằm chung một nơi.</p>
+          <p>Lịch kiểm định, nhắc việc, audit log, chi phí, QR và kiểm tra import nằm chung một nơi.</p>
         </div>
         <div className="operations-loading">
           {isLoading ? 'Đang tải dữ liệu...' : `${devices.length} thiết bị`}
@@ -629,7 +577,7 @@ const Operations: React.FC = () => {
         <Card className="ops-stat-card is-success">
           <CardBody>
             <Wrench size={22} />
-            <strong>{slaSummary.activeCount}</strong>
+            <strong>{activeRepairCount}</strong>
             <span>Yêu cầu sửa chữa mở</span>
           </CardBody>
         </Card>
@@ -655,7 +603,7 @@ const Operations: React.FC = () => {
       {activeTab === 'calendar' && renderCalendarTab()}
       {activeTab === 'tasks' && renderTasksTab()}
       {activeTab === 'audit' && renderAuditTab()}
-      {activeTab === 'sla' && renderSlaTab()}
+      {activeTab === 'costs' && renderCostsTab()}
       {activeTab === 'qr-import' && renderQrImportTab()}
 
       <div className="ops-footnote">

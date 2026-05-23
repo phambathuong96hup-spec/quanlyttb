@@ -529,59 +529,134 @@
 
 /* Print Styles */
 @media print {
+  @page {
+    size: A4;
+    margin: 8mm;
+  }
+
   body * {
     visibility: hidden;
   }
+
   #print-area, #print-area * {
     visibility: visible;
   }
+
   #print-area {
     position: absolute;
     left: 0;
     top: 0;
     width: 100%;
     margin: 0;
-    padding: 10mm;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 15mm;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(3, 58mm);
+    grid-auto-rows: 74mm;
+    gap: 5mm 6mm;
+    align-items: start;
+    justify-content: start;
   }
-  .print-page {
+
+  .print-page,
+  .print-qr-card {
     page-break-inside: avoid;
-    width: 50mm;
-    border: 1px dashed #999;
-    padding: 10mm 5mm;
+    break-inside: avoid;
+    width: 58mm;
+    min-height: 74mm;
+    box-sizing: border-box;
+    overflow: hidden;
+    padding: 5mm 4mm;
+    border: 1px dashed #94a3b8;
+    border-radius: 3mm;
     display: flex;
     flex-direction: column;
     align-items: center;
     text-align: center;
-    font-family: sans-serif;
+    font-family: Arial, sans-serif;
+    color: #0f172a;
   }
-  .print-page h2 {
-    font-size: 12px;
-    font-weight: bold;
-    margin: 0 0 2px 0;
+
+  .print-qr-org {
+    max-width: 100%;
+    overflow: hidden;
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 1.1;
+    text-overflow: ellipsis;
     text-transform: uppercase;
+    white-space: nowrap;
   }
-  .print-page .subtitle {
-    font-size: 10px;
-    margin: 0 0 10px 0;
-    color: #333;
+
+  .print-qr-subtitle {
+    margin: 1mm 0 3mm;
+    color: #334155;
+    font-size: 8px;
+    line-height: 1;
   }
-  .print-page h3 {
-    font-size: 14px;
-    margin: 12px 0 4px 0;
-    font-weight: bold;
+
+  .print-qr-card svg {
+    flex: 0 0 auto;
+    width: 25mm;
+    height: 25mm;
   }
-  .print-page .device-name {
-    font-size: 12px;
-    font-weight: bold;
-    margin: 0 0 4px 0;
+
+  .print-qr-code-list {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 1mm;
+    max-width: 100%;
+    max-height: 14mm;
+    margin-top: 3mm;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
-  .print-page .device-dept {
-    font-size: 10px;
+
+  .print-qr-code-list span {
+    max-width: 100%;
+    padding: 1mm 1.5mm;
+    border: 1px solid #cbd5e1;
+    border-radius: 2mm;
+    background: #f8fafc;
+    color: #0f172a;
+    font-family: "Cascadia Mono", Consolas, monospace;
+    font-size: 8px;
+    font-weight: 700;
+    line-height: 1.15;
+  }
+
+  .print-qr-hidden-count {
+    color: #475569 !important;
+    font-family: Arial, sans-serif !important;
+  }
+
+  .print-qr-name {
+    display: -webkit-box;
+    max-width: 100%;
+    margin: 2mm 0 1mm;
+    overflow: hidden;
+    color: #0f172a;
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 1.2;
+    overflow-wrap: anywhere;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .print-qr-department {
+    display: -webkit-box;
+    max-width: 100%;
     margin: 0;
-    color: #444;
+    overflow: hidden;
+    color: #334155;
+    font-size: 8px;
+    font-weight: 600;
+    line-height: 1.2;
+    overflow-wrap: anywhere;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 1;
   }
 }
 

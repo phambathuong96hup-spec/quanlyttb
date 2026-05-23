@@ -15,3 +15,23 @@ test('operations summary cards omit low-signal document and critical-risk counte
   assert.doesNotMatch(source, /Rủi ro/);
   assert.doesNotMatch(css, /ops-risk-score/);
 });
+
+test('operations page removes repair SLA reporting but keeps cost tracking', () => {
+  const source = readFileSync('src/pages/Operations.tsx', 'utf8');
+  const utils = readFileSync('src/utils/operationalInsights.ts', 'utf8');
+  const css = readFileSync('src/pages/Operations.css', 'utf8');
+
+  assert.doesNotMatch(source, /Báo cáo SLA sửa chữa/);
+  assert.doesNotMatch(source, /SLA & chi phí/);
+  assert.doesNotMatch(source, /buildSlaSummary/);
+  assert.doesNotMatch(source, /getRepairAgeDays/);
+  assert.doesNotMatch(source, /slaSummary/);
+  assert.doesNotMatch(utils, /interface SlaSummary/);
+  assert.doesNotMatch(utils, /buildSlaSummary/);
+  assert.doesNotMatch(utils, /getRepairAgeDays/);
+  assert.doesNotMatch(css, /ops-sla-grid/);
+  assert.match(source, /id: 'costs'/);
+  assert.match(source, /label: 'Chi phí'/);
+  assert.match(source, /renderCostsTab/);
+  assert.match(source, /Chi phí sửa chữa\/bảo trì/);
+});

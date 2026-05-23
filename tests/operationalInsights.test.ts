@@ -5,7 +5,6 @@ import {
   buildAuditEvents,
   buildInspectionItems,
   buildInspectionTasks,
-  buildSlaSummary,
   formatCurrencyVnd,
   type WorkflowOverrides,
 } from '../src/utils/operationalInsights.ts';
@@ -189,13 +188,13 @@ test('operational insights do not expose risk scoring mechanics', () => {
   assert.doesNotMatch(source, /Chưa có tín hiệu rủi ro lớn/);
 });
 
-test('buildSlaSummary groups active repair age and department workload', () => {
-  const summary = buildSlaSummary(repairs, devices, today);
+test('operational insights do not expose repair SLA reporting mechanics', () => {
+  const source = readFileSync('src/utils/operationalInsights.ts', 'utf8');
 
-  assert.equal(summary.activeCount, 1);
-  assert.equal(summary.completedCount, 1);
-  assert.equal(summary.overSevenDays, 1);
-  assert.equal(summary.byDepartment[0].department, 'ICU');
+  assert.doesNotMatch(source, /interface SlaSummary/);
+  assert.doesNotMatch(source, /buildSlaSummary/);
+  assert.doesNotMatch(source, /getRepairAgeDays/);
+  assert.doesNotMatch(source, /averageActiveAge/);
 });
 
 test('buildAuditEvents combines repair, transfer, task, and cost activity newest first', () => {
