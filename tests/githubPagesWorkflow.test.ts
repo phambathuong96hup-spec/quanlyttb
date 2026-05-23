@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import test from 'node:test';
 
 test('GitHub Pages workflow builds Vite app for the repository subpath', () => {
@@ -11,4 +11,8 @@ test('GitHub Pages workflow builds Vite app for the repository subpath', () => {
   assert.match(workflow, /cp dist\/index\.html dist\/404\.html/);
   assert.match(workflow, /actions\/upload-pages-artifact@v3/);
   assert.match(workflow, /actions\/deploy-pages@v4/);
+});
+
+test('GitHub Pages does not deploy the raw repository source', () => {
+  assert.equal(existsSync('.github/workflows/static.yml'), false);
 });
