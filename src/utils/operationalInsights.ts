@@ -41,16 +41,6 @@ export interface InspectionTask extends InspectionItem {
   updatedAt: string;
 }
 
-export interface RiskScore {
-  deviceId: string;
-  deviceName: string;
-  department: string;
-  status: string;
-  score: number;
-  level: 'critical' | 'high' | 'medium' | 'low';
-  reasons: string[];
-}
-
 export interface SlaDepartmentSummary {
   department: string;
   activeCount: number;
@@ -297,78 +287,6 @@ export const buildInspectionTasks = (
         updatedAt: override?.updatedAt || '',
       };
     });
-};
-
-export const buildRiskScores = (
-  devices: DeviceData[],
-  repairs: RepairData[],
-  inspectionItems: InspectionItem[]
-): RiskScore[] => {
-  const activeRepairsByDevice = repairs.reduce<Record<string, RepairData[]>>((acc, repair) => {
-    if (!isDoneStatus(repair.status)) {
-      acc[repair.deviceId] = [...(acc[repair.deviceId] || []), repair];
-    }
-    return acc;
-  }, {});
-
-  const allRepairsByDevice = repairs.reduce<Record<string, RepairData[]>>((acc, repair) => {
-    acc[repair.deviceId] = [...(acc[repair.deviceId] || []), repair];
-    return acc;
-  }, {});
-
-  const complianceByDevice = inspectionItems.reduce<Record<string, InspectionItem[]>>((acc, item) => {
-    acc[item.deviceId] = [...(acc[item.deviceId] || []), item];
-    return acc;
-  }, {});
-
-  return devices.map(device => {
-    let score = 0;
-    const reasons: string[] = [];
-    const status = cleanText(device.status || device['Hiện trạng thực tế'], 'Đang sử dụng');
-    const normalizedStatus = normalizeStatus(status);
-    const compliance = complianceByDevice[device.id] || [];
-    const expired = compliance.filter(item => item.statusKind === 'expired').length;
-    const warning = compliance.filter(item => item.statusKind === 'warning').length;
-    const missing = compliance.filter(item => item.statusKind === 'missing').length;
-    const activeRepairCount = activeRepairsByDevice[device.id]?.length || 0;
-    const repairHistoryCount = allRepairsByDevice[device.id]?.length || 0;
-
-    if (expired > 0) {
-      score += expired * 40;
-      reasons.push(`${expired} hồ sơ kiểm định hết hạn`);
-    }
-    if (warning > 0) {
-      score += warning * 24;
-      reasons.push(`${warning} hồ sơ sắp hết hạn`);
-    }
-    if (missing > 0) {
-      score += missing * 16;
-      reasons.push(`${missing} hồ sơ còn thiếu`);
-    }
-    if (activeRepairCount > 0) {
-      score += activeRepairCount * 32;
-      reasons.push(`${activeRepairCount} yêu cầu sửa chữa đang mở`);
-    }
-    if (repairHistoryCount >= 3) {
-      score += 12;
-      reasons.push('Hỏng lặp lại nhiều lần');
-    }
-    if (normalizedStatus.includes('hong') || normalizedStatus.includes('sua')) {
-      score += 20;
-      reasons.push(`Hiện trạng: ${status}`);
-    }
-
-    const level: RiskScore['level'] = score >= 70 ? 'critical' : score >= 45 ? 'high' : score >= 20 ? 'medium' : 'low';
-    return {
-      deviceId: device.id,
-      deviceName: device.name,
-      department: cleanText(device.department, 'Chưa phân bổ'),
-      status,
-      score,
-      level,
-      reasons: reasons.length > 0 ? reasons : ['Chưa có tín hiệu rủi ro lớn'],
-    };
-  }).sort((a, b) => b.score - a.score || a.deviceName.localeCompare(b.deviceName, 'vi'));
 };
 
 const getDeviceDepartment = (devices: DeviceData[], deviceId: string) => {

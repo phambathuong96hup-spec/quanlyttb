@@ -374,43 +374,6 @@
   box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.12);
 }
 
-.ops-risk-score {
-  display: inline-flex;
-  min-width: 76px;
-  flex-direction: column;
-  gap: 2px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: #eef2f7;
-}
-
-.ops-risk-score strong {
-  font-size: 1.2rem;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
-}
-
-.ops-risk-score span {
-  font-size: 0.68rem;
-  font-weight: 800;
-  text-transform: uppercase;
-}
-
-.ops-risk-score.is-critical {
-  background: #fee2e2;
-  color: #b91c1c;
-}
-
-.ops-risk-score.is-high {
-  background: #ffedd5;
-  color: #c2410c;
-}
-
-.ops-risk-score.is-medium {
-  background: #dbeafe;
-  color: #1d4ed8;
-}
-
 .ops-reason-list {
   display: flex;
   flex-wrap: wrap;

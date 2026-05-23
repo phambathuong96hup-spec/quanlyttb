@@ -8,7 +8,6 @@ import {
   History,
   QrCode,
   ReceiptText,
-  ShieldAlert,
   Wrench,
 } from 'lucide-react';
 import {
@@ -32,7 +31,6 @@ import {
   buildAuditEvents,
   buildInspectionItems,
   buildInspectionTasks,
-  buildRiskScores,
   buildSlaSummary,
   formatCurrencyVnd,
   getCalendarDays,
@@ -49,7 +47,7 @@ import {
 import { isRepairActive } from '../utils/statusUtils';
 import './Operations.css';
 
-type OperationsTab = 'calendar' | 'tasks' | 'risk' | 'audit' | 'sla' | 'qr-import';
+type OperationsTab = 'calendar' | 'tasks' | 'audit' | 'sla' | 'qr-import';
 
 interface CostFormState {
   deviceId: string;
@@ -77,7 +75,6 @@ const workflowStatusOptions: WorkflowStatus[] = ['todo', 'preparing', 'submitted
 const tabs: Array<{ id: OperationsTab; label: string; icon: React.ElementType }> = [
   { id: 'calendar', label: 'Lịch kiểm định', icon: CalendarDays },
   { id: 'tasks', label: 'Nhắc việc', icon: ClipboardCheck },
-  { id: 'risk', label: 'Rủi ro', icon: ShieldAlert },
   { id: 'audit', label: 'Lịch sử', icon: History },
   { id: 'sla', label: 'SLA & chi phí', icon: ReceiptText },
   { id: 'qr-import', label: 'QR & Import', icon: QrCode },
@@ -188,7 +185,6 @@ const Operations: React.FC = () => {
     () => buildInspectionTasks(inspectionItems, workflowOverrides),
     [inspectionItems, workflowOverrides]
   );
-  const riskScores = useMemo(() => buildRiskScores(devices, repairs, inspectionItems), [devices, inspectionItems, repairs]);
   const slaSummary = useMemo(() => buildSlaSummary(repairs, devices, today), [devices, repairs, today]);
   const auditEvents = useMemo(
     () => buildAuditEvents({ devices, repairs, transfers, inspectionTasks, costEntries }),
@@ -392,49 +388,6 @@ const Operations: React.FC = () => {
                   onChange={event => updateWorkflow(task.taskKey, { note: event.target.value })}
                   placeholder="Ghi chú xử lý"
                 />
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    </section>
-  );
-
-  const renderRiskTab = () => (
-    <section className="ops-panel">
-      <div className="ops-section-header">
-        <div>
-          <h2>Chấm điểm rủi ro thiết bị</h2>
-          <p>Điểm cao khi thiết bị có hồ sơ hết hạn, báo hỏng đang mở hoặc hỏng lặp lại.</p>
-        </div>
-        <Badge variant="primary">{riskScores.length} thiết bị</Badge>
-      </div>
-      <Table className="ops-table">
-        <TableHead>
-          <TableRow>
-            <TableHeader>Điểm</TableHeader>
-            <TableHeader>Thiết bị</TableHeader>
-            <TableHeader>Khoa/phòng</TableHeader>
-            <TableHeader>Hiện trạng</TableHeader>
-            <TableHeader>Lý do</TableHeader>
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {riskScores.slice(0, 80).map((score, index) => (
-            <TableRow key={`${score.deviceId}-${index}`}>
-              <TableCell>
-                <div className={`ops-risk-score is-${score.level}`}>
-                  <strong>{score.score}</strong>
-                  <span>{score.level === 'critical' ? 'Rất cao' : score.level === 'high' ? 'Cao' : score.level === 'medium' ? 'Theo dõi' : 'Thấp'}</span>
-                </div>
-              </TableCell>
-              <TableCell><strong>{score.deviceName}</strong><br /><small>{score.deviceId}</small></TableCell>
-              <TableCell>{score.department}</TableCell>
-              <TableCell>{score.status}</TableCell>
-              <TableCell>
-                <div className="ops-reason-list">
-                  {score.reasons.map(reason => <span key={reason}>{reason}</span>)}
-                </div>
               </TableCell>
             </TableRow>
           ))}
@@ -651,7 +604,7 @@ const Operations: React.FC = () => {
       <div className="operations-header">
         <div>
           <h1><ClipboardCheck size={30} /> Điều hành công việc</h1>
-          <p>Lịch kiểm định, nhắc việc, rủi ro, audit log, SLA, chi phí, QR và kiểm tra import nằm chung một nơi.</p>
+          <p>Lịch kiểm định, nhắc việc, audit log, SLA, chi phí, QR và kiểm tra import nằm chung một nơi.</p>
         </div>
         <div className="operations-loading">
           {isLoading ? 'Đang tải dữ liệu...' : `${devices.length} thiết bị`}
@@ -701,7 +654,6 @@ const Operations: React.FC = () => {
 
       {activeTab === 'calendar' && renderCalendarTab()}
       {activeTab === 'tasks' && renderTasksTab()}
-      {activeTab === 'risk' && renderRiskTab()}
       {activeTab === 'audit' && renderAuditTab()}
       {activeTab === 'sla' && renderSlaTab()}
       {activeTab === 'qr-import' && renderQrImportTab()}

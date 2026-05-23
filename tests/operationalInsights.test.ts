@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   buildAuditEvents,
   buildInspectionItems,
   buildInspectionTasks,
-  buildRiskScores,
   buildSlaSummary,
   formatCurrencyVnd,
   type WorkflowOverrides,
@@ -180,13 +180,13 @@ test('buildInspectionTasks creates actionable tasks and applies workflow overrid
   assert.equal(tasks.find(task => task.deviceId === 'TB-003')?.priority, 'medium');
 });
 
-test('buildRiskScores ranks expired compliance and active repairs above lower-risk devices', () => {
-  const items = buildInspectionItems(devices, today);
-  const scores = buildRiskScores(devices, repairs, items);
+test('operational insights do not expose risk scoring mechanics', () => {
+  const source = readFileSync('src/utils/operationalInsights.ts', 'utf8');
 
-  assert.equal(scores[0].deviceId, 'TB-001');
-  assert.ok(scores[0].score > scores.find(score => score.deviceId === 'TB-004')!.score);
-  assert.ok(scores[0].reasons.some(reason => reason.includes('hết hạn')));
+  assert.doesNotMatch(source, /interface RiskScore/);
+  assert.doesNotMatch(source, /buildRiskScores/);
+  assert.doesNotMatch(source, /score \+=/);
+  assert.doesNotMatch(source, /Chưa có tín hiệu rủi ro lớn/);
 });
 
 test('buildSlaSummary groups active repair age and department workload', () => {
