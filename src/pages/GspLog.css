@@ -1,0 +1,358 @@
+/* ===== GSP Temperature/Humidity Log Page ===== */
+
+.dashboard-page {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.dashboard-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+
+.dashboard-title {
+  font-size: 1.45rem;
+  font-weight: 820;
+  color: var(--text-primary);
+  margin-bottom: 3px;
+}
+
+.dashboard-subtitle {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.dashboard-page .stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.gsp-stats-grid {
+  margin-bottom: 18px;
+}
+
+.dashboard-page .stat-card {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 14px;
+  min-height: 106px;
+  padding: 18px;
+  border: 1px solid var(--border) !important;
+  border-left-width: 4px !important;
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.dashboard-page .gradient-teal {
+  border-left-color: var(--success) !important;
+}
+
+.dashboard-page .gradient-blue {
+  border-left-color: var(--accent) !important;
+}
+
+.dashboard-page .gradient-rose {
+  border-left-color: var(--danger) !important;
+}
+
+.dashboard-page .stat-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--success-light);
+  color: var(--success);
+}
+
+.dashboard-page .gradient-blue .stat-icon {
+  background: var(--accent-light);
+  color: var(--accent);
+}
+
+.dashboard-page .gradient-rose .stat-icon {
+  background: var(--danger-light);
+  color: var(--danger);
+}
+
+.dashboard-page .stat-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.dashboard-page .stat-value {
+  color: var(--text-primary);
+  font-size: 1.65rem;
+  font-weight: 860;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+}
+
+.dashboard-page .stat-label {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.gsp-layout {
+  display: grid;
+  grid-template-columns: 350px 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+/* Form */
+.gsp-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.gsp-form-label {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 760;
+  margin-bottom: 6px;
+  color: var(--text-secondary);
+}
+
+.gsp-form-label .label-icon {
+  margin-right: 4px;
+  vertical-align: middle;
+}
+
+.gsp-form-label .label-limit {
+  color: var(--warning);
+  font-size: 0.7rem;
+  font-weight: 500;
+}
+
+.gsp-form-input,
+.gsp-form-select,
+.gsp-form-textarea {
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  font-family: inherit;
+  box-sizing: border-box;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.gsp-form-input:focus,
+.gsp-form-select:focus,
+.gsp-form-textarea:focus {
+  border-color: var(--primary);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(13, 148, 136, 0.1);
+}
+
+.gsp-form-textarea {
+  resize: vertical;
+}
+
+.gsp-violation-hint {
+  color: var(--danger);
+  font-size: 0.75rem;
+  margin-top: 4px;
+  font-weight: 500;
+}
+
+/* Standards info box */
+.gsp-standards-box {
+  margin-top: 1.5rem;
+  padding: 12px;
+  background: var(--surface-50);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.gsp-standards-box ul {
+  margin: 8px 0 0;
+  padding-left: 16px;
+  line-height: 1.8;
+  list-style: disc;
+}
+
+/* Chart area */
+.gsp-chart-header-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.gsp-period-select {
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: border-color var(--transition-fast);
+}
+
+.gsp-period-select:focus {
+  border-color: var(--primary);
+  outline: none;
+}
+
+.gsp-view-toggle button {
+  padding: 4px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  font-family: inherit;
+}
+
+.gsp-view-toggle button.active {
+  background: var(--primary);
+  color: white;
+  border-color: var(--primary);
+}
+
+.gsp-view-toggle button:not(.active) {
+  background: var(--surface);
+  color: var(--text-primary);
+}
+
+.gsp-view-toggle button:not(.active):hover {
+  background: var(--background);
+}
+
+.gsp-chart-container {
+  height: 380px;
+  position: relative;
+}
+
+/* Table view */
+.gsp-table-container {
+  overflow-x: auto;
+  max-height: 420px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.gsp-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.gsp-table th {
+  padding: 10px 14px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  background: #f6f9fb;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.gsp-table td {
+  padding: 10px 14px;
+  font-size: 0.85rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.gsp-table td.td-small,
+.gsp-note-cell {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.gsp-table tr.has-violation {
+  background: rgba(239, 68, 68, 0.04);
+}
+
+.gsp-table td.violation-value {
+  color: var(--danger);
+  font-weight: bold;
+}
+
+.gsp-table tbody tr {
+  transition: background var(--transition-fast);
+}
+
+.gsp-table tbody tr:hover {
+  background: #f2fbf8;
+}
+
+/* Violation alert cards */
+.gsp-violation-card {
+  padding: 12px 16px;
+  background: var(--danger-light);
+  border-radius: var(--radius-md);
+  border: 1px solid #fecaca;
+  font-size: 0.85rem;
+}
+
+.gsp-violation-card .violation-detail {
+  margin-left: 8px;
+  color: var(--danger);
+}
+
+.gsp-violation-card .violation-note {
+  margin-left: 8px;
+  color: var(--text-secondary);
+}
+
+.gsp-violations-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.gsp-violations-more {
+  text-align: center;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.gsp-empty-message {
+  text-align: center;
+  padding: 3rem;
+  color: var(--text-secondary);
+}
+
+.gsp-chart-column {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+/* Responsive */
+@media (max-width: 900px) {
+  .gsp-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 480px) {
+  .gsp-chart-header-actions {
+    flex-wrap: wrap;
+  }
+
+  .gsp-chart-container {
+    height: 280px;
+  }
+}

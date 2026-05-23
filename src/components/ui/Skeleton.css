@@ -1,0 +1,101 @@
+/* Base Skeleton */
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    #e4ebf0 25%,
+    #f4f7f9 37%,
+    #e4ebf0 63%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.8s ease-in-out infinite;
+  border-radius: var(--radius-sm);
+}
+
+/* Shimmer Animation */
+@keyframes skeleton-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+/* Skeleton Text */
+.skeleton-text {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.skeleton-text-line {
+  height: 14px;
+  border-radius: 6px;
+}
+
+.skeleton-text-line:last-child {
+  width: 60%;
+}
+
+/* Skeleton Card */
+.skeleton-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px;
+  background: var(--surface);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+}
+
+.skeleton-card-image {
+  height: 160px;
+  border-radius: var(--radius-sm);
+}
+
+.skeleton-card-title {
+  height: 20px;
+  width: 70%;
+  border-radius: 6px;
+}
+
+.skeleton-card-desc {
+  height: 14px;
+  width: 100%;
+  border-radius: 6px;
+}
+
+.skeleton-card-desc-short {
+  height: 14px;
+  width: 45%;
+  border-radius: 6px;
+}
+
+/* Skeleton Table */
+.skeleton-table {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.skeleton-table-row {
+  display: flex;
+  gap: 16px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.skeleton-table-row:last-child {
+  border-bottom: none;
+}
+
+.skeleton-table-cell {
+  height: 16px;
+  flex: 1;
+  border-radius: 6px;
+}
+
+.skeleton-table-row:first-child .skeleton-table-cell {
+  height: 18px;
+  opacity: 0.7;
+}
