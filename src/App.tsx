@@ -15,7 +15,6 @@ const Requests = lazy(() => import('./pages/Requests'));
 const TrackDevices = lazy(() => import('./pages/TrackDevices'));
 const Reports = lazy(() => import('./pages/Reports'));
 const Operations = lazy(() => import('./pages/Operations'));
-const GspLog = lazy(() => import('./pages/GspLog'));
 const AIAssistant = lazy(() => import('./pages/AIAssistant'));
 
 const PageLoader = () => (
@@ -71,7 +70,6 @@ function App() {
                   <Route path="operations" element={<PrivateRoute><Operations /></PrivateRoute>} />
                   <Route path="transfers" element={<Navigate to="/requests?type=transfer" replace />} />
                   <Route path="reports" element={<PrivateRoute><Reports /></PrivateRoute>} />
-                  <Route path="gsp" element={<PrivateRoute><GspLog /></PrivateRoute>} />
                   <Route path="ai-assistant" element={<PrivateRoute><AIAssistant /></PrivateRoute>} />
                 </Route>
 

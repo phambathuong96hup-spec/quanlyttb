@@ -7,7 +7,6 @@ import {
   ClipboardPlus,
   ClipboardCheck,
   PieChart,
-  Thermometer,
   Lock,
   Wrench,
   BotMessageSquare,
@@ -33,7 +32,6 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
     { path: '/tracking', name: 'Theo dõi thiết bị', icon: Wrench, private: true },
     { path: '/operations', name: 'Điều hành công việc', icon: ClipboardCheck, private: true },
     { path: '/reports', name: 'Thống kê & báo cáo', icon: PieChart, private: true },
-    { path: '/gsp', name: 'Nhật ký nhiệt độ (GSP)', icon: Thermometer, private: true },
   ];
 
 
