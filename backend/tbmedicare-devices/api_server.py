@@ -70,6 +70,17 @@ def api_stats(dept: str = None):
     except Exception as e:
         return error_response(f"Lỗi: {e}")
 
+@app.get("/api/dashboard/departments")
+def api_department_dashboard(dept: str = Query(None), category: str = Query(None)):
+    try:
+        stats = db_manager.get_department_device_dashboard(
+            dept_code=dept,
+            category_code=category,
+        )
+        return success_response(stats)
+    except Exception as e:
+        return error_response(f"Lỗi: {e}")
+
 @app.get("/api/devices/in-use")
 def api_devices_in_use(
     dept: str = Query(None),

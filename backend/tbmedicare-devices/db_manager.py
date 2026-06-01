@@ -290,8 +290,36 @@ def get_dashboard_stats(dept_code=None):
             cur.execute(q3, tuple(p3))
             machines_in_use = cur.fetchone()["count"]
             
-            # 4. Available machines
-            machines_available = max(0, total_machines - machines_in_use)
+            # 4. Available machines, excluding in-use and maintenance machines
+            q4 = """
+                SELECT COUNT(*) as count
+                FROM machines m
+                WHERE m.is_active = TRUE
+                  AND m.status <> 'maintenance'
+                  AND m.id NOT IN (
+                    SELECT machine_id FROM device_usages WHERE status = 'in_use'
+                  )
+            """
+            p4 = []
+            if dept_code:
+                cur.execute("SELECT id FROM departments WHERE code = %s", (dept_code,))
+                row = cur.fetchone()
+                if row:
+                    q4 += " AND m.department_id = %s"
+                    p4.append(row["id"])
+            cur.execute(q4, tuple(p4))
+            machines_available = cur.fetchone()["count"]
+
+            q4b = "SELECT COUNT(*) as count FROM machines WHERE is_active = TRUE AND status = 'maintenance'"
+            p4b = []
+            if dept_code:
+                cur.execute("SELECT id FROM departments WHERE code = %s", (dept_code,))
+                row = cur.fetchone()
+                if row:
+                    q4b += " AND department_id = %s"
+                    p4b.append(row["id"])
+            cur.execute(q4b, tuple(p4b))
+            machines_maintenance = cur.fetchone()["count"]
             
             # 5. Stats by category
             q5 = """
@@ -314,8 +342,125 @@ def get_dashboard_stats(dept_code=None):
                 "machines_total": total_machines,
                 "machines_in_use": machines_in_use,
                 "machines_available": machines_available,
+                "machines_maintenance": machines_maintenance,
                 "categories": categories_stats
             }
+
+def get_department_device_dashboard(dept_code=None, category_code=None):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            query = """
+                SELECT
+                    m.id,
+                    m.machine_code,
+                    m.machine_name,
+                    m.room_code,
+                    m.status as machine_status,
+                    m.is_active,
+                    c.name as category_name,
+                    c.code as category_code,
+                    md.code as machine_department_code,
+                    md.name as machine_department_name,
+                    u.status as usage_status,
+                    u.started_at,
+                    u.department_code as usage_department_code,
+                    ud.name as usage_department_name,
+                    e.his_treatment_code,
+                    p.full_name as patient_name
+                FROM machines m
+                JOIN machine_categories c ON c.id = m.category_id
+                LEFT JOIN departments md ON md.id = m.department_id
+                LEFT JOIN device_usages u ON u.machine_id = m.id AND u.status = 'in_use'
+                LEFT JOIN encounters e ON e.id = u.encounter_id
+                LEFT JOIN patients p ON p.id = e.patient_id
+                LEFT JOIN departments ud ON ud.code = u.department_code
+                WHERE m.is_active = TRUE
+            """
+            params = []
+            if dept_code:
+                query += " AND (u.department_code = %s OR (u.department_code IS NULL AND md.code = %s))"
+                params.extend([dept_code, dept_code])
+            if category_code:
+                query += " AND c.code = %s"
+                params.append(category_code)
+
+            query += " ORDER BY COALESCE(ud.name, md.name, 'Chưa gán khoa'), m.room_code NULLS LAST, m.machine_name"
+            cur.execute(query, tuple(params))
+            rows = cur.fetchall()
+
+    departments = {}
+    summary = {
+        "departments": 0,
+        "machines_total": 0,
+        "in_use": 0,
+        "available": 0,
+        "maintenance": 0,
+    }
+
+    for row in rows:
+        status = "in_use" if row.get("usage_status") == "in_use" else row.get("machine_status", "available")
+        dept_code_key = row.get("usage_department_code") or row.get("machine_department_code") or "UNASSIGNED"
+        dept_name = row.get("usage_department_name") or row.get("machine_department_name") or "Chưa gán khoa"
+        room_code = row.get("room_code") or "Chưa gán phòng"
+
+        if dept_code_key not in departments:
+            departments[dept_code_key] = {
+                "department_code": dept_code_key,
+                "department_name": dept_name,
+                "total": 0,
+                "in_use": 0,
+                "available": 0,
+                "maintenance": 0,
+                "rooms": {},
+                "devices": {
+                    "in_use": [],
+                    "available": [],
+                    "maintenance": [],
+                },
+            }
+
+        dept = departments[dept_code_key]
+        dept["total"] += 1
+        summary["machines_total"] += 1
+
+        if status == "in_use":
+            dept["in_use"] += 1
+            summary["in_use"] += 1
+            status_key = "in_use"
+        elif status == "maintenance":
+            dept["maintenance"] += 1
+            summary["maintenance"] += 1
+            status_key = "maintenance"
+        else:
+            dept["available"] += 1
+            summary["available"] += 1
+            status_key = "available"
+
+        if room_code not in dept["rooms"]:
+            dept["rooms"][room_code] = {"room_code": room_code, "total": 0, "in_use": 0, "available": 0, "maintenance": 0}
+        dept["rooms"][room_code]["total"] += 1
+        dept["rooms"][room_code][status_key] += 1
+
+        dept["devices"][status_key].append({
+            "machine_code": row.get("machine_code"),
+            "machine_name": row.get("machine_name"),
+            "category_name": row.get("category_name"),
+            "room_code": room_code,
+            "patient_name": row.get("patient_name"),
+            "his_treatment_code": row.get("his_treatment_code"),
+            "started_at": row.get("started_at"),
+        })
+
+    payload_departments = []
+    for dept in departments.values():
+        dept["rooms"] = list(dept["rooms"].values())
+        payload_departments.append(dept)
+
+    summary["departments"] = len(payload_departments)
+    return {
+        "summary": summary,
+        "departments": payload_departments,
+    }
 
 def get_in_use_devices(dept_code=None, category_code=None, search=None, page=1, limit=50):
     offset = (page - 1) * limit
