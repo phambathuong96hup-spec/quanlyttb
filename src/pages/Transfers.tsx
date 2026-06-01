@@ -1,9 +1,11 @@
 import React, { useEffect, useMemo, useState, useRef, useCallback } from 'react';
-import { CheckCircle, Download, FileText, Loader2, RefreshCw, Repeat2, Send, XCircle, X, Camera, Search } from 'lucide-react';
+import { CheckCircle, Download, FileText, Loader2, RefreshCw, Repeat2, Send, XCircle, X, Camera, Search, ShieldCheck, Sparkles } from 'lucide-react';
 import { Card, CardBody, Button, Input, Table, TableHead, TableBody, TableRow, TableHeader, TableCell, Badge, useToast, FileUploader, Modal } from '../components/ui';
-import { matchSmartSearch, removeVietnameseTones } from '../utils/stringUtils';
+import { matchSmartSearch } from '../utils/stringUtils';
 import {
   createTransfer,
+  createTransferTypeRequest,
+  assignTransferDevice,
   receiveTransfer,
   rejectTransfer,
   cancelTransfer,
@@ -13,8 +15,9 @@ import { useDevices } from '../hooks/useDevices';
 import { useTransfers } from '../hooks/useTransfers';
 import { useAuth } from '../authContext';
 import { exportCsv } from '../utils/exportCsv';
-import { getAssignableDepartments } from '../utils/departmentUtils';
+import { buildTransferRecommendations, getTransferStockGuardViolation } from '../utils/transferRecommendations';
 import { stripEvidenceLinks } from '../utils/evidenceUtils';
+import { fetchHisCategories, type HisCategory } from '../services/hisDevicesApi';
 import { EvidenceLinks } from '../components/EvidenceLinks';
 import { Html5Qrcode } from 'html5-qrcode';
 import jsPDF from 'jspdf';
@@ -35,8 +38,9 @@ const Transfers: React.FC<TransfersProps> = ({ defaultTab = 'requests' }) => {
   const reversedTransfers = useMemo(() => [...transfers].reverse(), [transfers]);
   const [isSaving, setIsSaving] = useState(false);
   const [activeTab, setActiveTab] = useState<'create' | 'requests' | 'history'>(defaultTab);
-  const [transferType, setTransferType] = useState<'Cho mượn' | 'Mượn' | 'Trả'>('Cho mượn');
+  const [transferType] = useState<'Mượn' | 'Trả'>('Mượn');
   const [deviceId, setDeviceId] = useState('');
+  const [deviceType, setDeviceType] = useState('');
   const [toDepartment, setToDepartment] = useState('');
   const [reason, setReason] = useState('');
   const [message, setMessage] = useState('');
@@ -54,6 +58,9 @@ const Transfers: React.FC<TransfersProps> = ({ defaultTab = 'requests' }) => {
   const [receiveFile, setReceiveFile] = useState<File | null>(null);
   const [receiveNote, setReceiveNote] = useState('');
   const [isReceiving, setIsReceiving] = useState(false);
+  const [assigningTransferId, setAssigningTransferId] = useState('');
+  const [assignmentDeviceIds, setAssignmentDeviceIds] = useState<Record<string, string>>({});
+  const [hisCategories, setHisCategories] = useState<HisCategory[]>([]);
 
   const readFileAsBase64 = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
@@ -93,6 +100,12 @@ const Transfers: React.FC<TransfersProps> = ({ defaultTab = 'requests' }) => {
   }, [loadData]);
 
   useEffect(() => {
+    fetchHisCategories()
+      .then(categories => setHisCategories(Array.isArray(categories) ? categories : []))
+      .catch(() => setHisCategories([]));
+  }, []);
+
+  useEffect(() => {
     setSearchQuery('');
     setStatusFilter('all');
     setDeptFilter('all');
@@ -121,6 +134,15 @@ const Transfers: React.FC<TransfersProps> = ({ defaultTab = 'requests' }) => {
     // Show all devices — backend validates ownership/permission on submit
     return devices;
   }, [devices]);
+  const deviceTypes = useMemo(() => {
+    return Array.from(new Set(devices.map(device => String(device.name || '').trim()).filter(Boolean)))
+      .sort((first, second) => first.localeCompare(second, 'vi'));
+  }, [devices]);
+  const borrowDeviceTypes = useMemo(() => {
+    const hisTypes = hisCategories.map(category => category.name.trim()).filter(Boolean);
+    return Array.from(new Set([...hisTypes, ...deviceTypes]))
+      .sort((first, second) => first.localeCompare(second, 'vi'));
+  }, [deviceTypes, hisCategories]);
 
   const startScanner = useCallback(async () => {
     setScanResult('');
@@ -173,7 +195,7 @@ const Transfers: React.FC<TransfersProps> = ({ defaultTab = 'requests' }) => {
   }, [stopScanner]);
   // ===== End QR Scanner =====
 
-  const pendingRequests = reversedTransfers.filter(t => t.status === 'PENDING_RECEIVE' && (isAdmin || t.toDepartment === userDepartment || t.requestedBy === username || t.fromDepartment === userDepartment));
+  const pendingRequests = reversedTransfers.filter(t => ['PENDING_ASSIGN', 'PENDING_RECEIVE'].includes(t.status) && (isAdmin || t.toDepartment === userDepartment || t.requestedBy === username || t.fromDepartment === userDepartment));
 
   const filteredTransfers = useMemo(() => {
     let list = activeTab === 'requests' ? pendingRequests : reversedTransfers;
@@ -210,30 +232,55 @@ const Transfers: React.FC<TransfersProps> = ({ defaultTab = 'requests' }) => {
   const visibleTransfers = filteredTransfers;
 
   const selectedDevice = devices.find(device => device.id === deviceId);
-  const availableDepartments = useMemo(() => {
-    return getAssignableDepartments(departments).filter(dept => dept !== selectedDevice?.department);
-  }, [departments, selectedDevice?.department]);
-  const departmentSuggestions = useMemo(() => {
-    const query = removeVietnameseTones(toDepartment.trim().toLowerCase());
-    const matches = query
-      ? availableDepartments.filter(dept => removeVietnameseTones(dept.toLowerCase()).includes(query))
-      : availableDepartments;
-    return matches.slice(0, 8);
-  }, [availableDepartments, toDepartment]);
-
+  const targetDepartmentForRecommendation = transferType === 'Mượn' ? userDepartment : toDepartment;
+  const transferRecommendations = useMemo(() => {
+    if (transferType === 'Trả' || !deviceType) return [];
+    return buildTransferRecommendations({
+      devices,
+      targetDepartment: targetDepartmentForRecommendation,
+      requestedDeviceType: deviceType,
+      pendingTransfers: pendingRequests,
+      limit: 4,
+    });
+  }, [deviceType, devices, pendingRequests, targetDepartmentForRecommendation, transferType]);
+  const stockGuardViolation = useMemo(() => {
+    if (transferType !== 'Trả' || !deviceId) return null;
+    return getTransferStockGuardViolation({
+      devices,
+      selectedDeviceId: deviceId,
+      targetDepartment: targetDepartmentForRecommendation,
+      pendingTransfers: pendingRequests,
+    });
+  }, [deviceId, devices, pendingRequests, targetDepartmentForRecommendation, transferType]);
   useEffect(() => {
     if (transferType === 'Trả' && selectedDevice?.department) {
       setToDepartment(selectedDevice.department);
     }
   }, [transferType, selectedDevice]);
 
+  useEffect(() => {
+    if (!deviceType && borrowDeviceTypes.length > 0) setDeviceType(borrowDeviceTypes[0]);
+  }, [borrowDeviceTypes, deviceType]);
+
   const submitTransfer = async (event: React.FormEvent) => {
     event.preventDefault();
     const actualToDepartment = transferType === 'Mượn' ? userDepartment : toDepartment;
     
-    if (!deviceId || !actualToDepartment) {
-      setMessage('Vui lòng điền đầy đủ thông tin thiết bị và khoa nhận.');
+    if ((transferType === 'Trả' ? !deviceId : !deviceType) || !actualToDepartment) {
+      setMessage('Vui lòng điền đầy đủ loại thiết bị và khoa nhận.');
       return;
+    }
+    if (transferType === 'Trả') {
+      const guardViolation = getTransferStockGuardViolation({
+        devices,
+        selectedDeviceId: deviceId,
+        targetDepartment: actualToDepartment,
+        pendingTransfers: pendingRequests,
+      });
+      if (guardViolation) {
+        setMessage(`Không thể luân chuyển: ${guardViolation.department} phải còn ít nhất 1 thiết bị cùng loại (${guardViolation.deviceType}).`);
+        return;
+      }
     }
     setIsSaving(true);
     
@@ -254,24 +301,60 @@ const Transfers: React.FC<TransfersProps> = ({ defaultTab = 'requests' }) => {
     }
     
     const finalReason = `[${transferType}] ${reason}`;
-    const response = await createTransfer({ 
-      deviceId, 
-      toDepartment: actualToDepartment, 
-      reason: finalReason, 
-      actorUsername: username,
-      imageContent,
-      imageName,
-      imageMimeType
-    });
+    const response = transferType === 'Trả'
+      ? await createTransfer({
+        deviceId,
+        toDepartment: actualToDepartment,
+        reason: finalReason,
+        actorUsername: username,
+        imageContent,
+        imageName,
+        imageMimeType
+      })
+      : await createTransferTypeRequest({
+        deviceType,
+        toDepartment: actualToDepartment,
+        reason: finalReason,
+        actorUsername: username,
+        imageContent,
+        imageName,
+        imageMimeType
+      });
     setIsSaving(false);
     setMessage(response.message || '');
     if (response.success) {
       setReason('');
       setSelectedFile(null);
-      if (transferType === 'Cho mượn' || transferType === 'Trả') setToDepartment('');
+      if (transferType === 'Trả') setToDepartment('');
       await loadData();
       setActiveTab('requests');
     }
+  };
+
+  const getAssignmentRecommendations = (transfer: TransferData) => buildTransferRecommendations({
+  devices,
+  targetDepartment: transfer.toDepartment,
+  requestedDeviceType: transfer.deviceType || transfer.deviceName,
+  pendingTransfers: pendingRequests,
+  limit: 8,
+});
+
+  const handleAssignDevice = async (transfer: TransferData) => {
+    const selectedAssignmentDeviceId = assignmentDeviceIds[transfer.transferId];
+    if (!selectedAssignmentDeviceId) {
+      toast.warning('Vui lòng chọn máy cụ thể để gán.');
+      return;
+    }
+    setAssigningTransferId(transfer.transferId);
+    const response = await assignTransferDevice({
+      transferId: transfer.transferId,
+      deviceId: selectedAssignmentDeviceId,
+      actorUsername: username,
+      note: 'Admin chọn máy theo thuật toán đề xuất',
+    });
+    setAssigningTransferId('');
+    toast.info(response.message || (response.success ? 'Đã gán máy.' : 'Không gán được máy.'));
+    if (response.success) await loadData();
   };
 
   const handleReceiveClick = (transfer: TransferData) => {
@@ -436,29 +519,20 @@ const Transfers: React.FC<TransfersProps> = ({ defaultTab = 'requests' }) => {
                 <Repeat2 size={28} style={{ color: 'white' }} />
               </div>
               <div className="transfer-summary-info request-summary-content">
-                <h3>Luân chuyển / Mượn thiết bị</h3>
-                <p>Tạo yêu cầu chuyển thiết bị giữa các khoa phòng.</p>
+                <h3>Yêu cầu mượn trang thiết bị</h3>
+                <p>Chọn loại trang thiết bị theo danh mục HIS; Admin quyết định máy cụ thể và khoa xuất.</p>
               </div>
             </div>
 
             <form className="form-section request-form" onSubmit={submitTransfer}>
               <div className="request-field">
-                <label className="input-label">Loại yêu cầu</label>
-                <select className="filter-select request-select" style={{ marginBottom: '8px' }} value={transferType} onChange={e => {
-                  setTransferType(e.target.value as 'Cho mượn' | 'Mượn' | 'Trả');
-                  setToDepartment('');
-                }}>
-                  <option value="Cho mượn">Cho mượn / Luân chuyển đi</option>
-                  <option value="Mượn">Mượn thiết bị từ khoa khác</option>
-                  <option value="Trả">Trả thiết bị về khoa cũ</option>
-                </select>
-              </div>
-              <div className="request-field">
                 <label className="input-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  Thiết bị
-                  <Button className="request-qr-button" variant="secondary" size="sm" type="button" style={{ padding: '2px 8px', fontSize: '0.8rem' }} onClick={startScanner}>
-                    <Camera size={14} style={{ marginRight: '4px' }} /> Quét QR/Barcode
-                  </Button>
+                  {transferType === 'Trả' ? 'Thiết bị hoàn trả' : 'Mượn loại trang thiết bị gì'}
+                  {transferType === 'Trả' && (
+                    <Button className="request-qr-button" variant="secondary" size="sm" type="button" style={{ padding: '2px 8px', fontSize: '0.8rem' }} onClick={startScanner}>
+                      <Camera size={14} style={{ marginRight: '4px' }} /> Quét QR/Barcode
+                    </Button>
+                  )}
                 </label>
 
                 {/* ===== QR Scanner Modal ===== */}
@@ -494,50 +568,70 @@ const Transfers: React.FC<TransfersProps> = ({ defaultTab = 'requests' }) => {
                   </div>
                 )}
                 {/* ===== End Scanner Modal ===== */}
-                <select className="filter-select request-select" value={deviceId} onChange={e => setDeviceId(e.target.value)} required>
-                  <option value="" disabled>-- Chọn thiết bị --</option>
-                  {transferableDevices.map((device, index) => (
-                    <option key={`${device.id}-${index}`} value={device.id}>{device.id} - {device.name}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="info-grid request-info-grid">
-                <div className="info-item"><span className="info-label">Vị trí thiết bị (các khoa chứa thiết bị)</span><span className="info-value">{selectedDevice?.department || '—'}</span></div>
-                <div className="info-item"><span className="info-label">Người tạo yêu cầu</span><span className="info-value">{userName || username} ({userDepartment})</span></div>
-              </div>
-              <div className="request-field">
-                <label className="input-label" htmlFor="transfer-to-department">{transferType === 'Cho mượn' || transferType === 'Trả' ? 'Khoa/phòng nhận' : 'Chuyển về khoa (Khoa của bạn)'}</label>
                 {transferType === 'Trả' ? (
-                  <Input id="transfer-to-department" value={toDepartment} readOnly disabled required style={{ backgroundColor: 'var(--surface-50)' }} />
-                ) : transferType === 'Cho mượn' ? (
-                  <div className="transfer-department-picker">
-                    <Input
-                      id="transfer-to-department"
-                      value={toDepartment}
-                      onChange={e => setToDepartment(e.target.value)}
-                      placeholder="Nhập hoặc chọn khoa/phòng nhận"
-                      aria-describedby="transfer-to-department-help"
-                      required
-                    />
-                    <p id="transfer-to-department-help" className="request-field-hint">
-                      Chọn gợi ý bên dưới hoặc nhập tên khoa/phòng mới.
-                    </p>
-                    {departmentSuggestions.length > 0 && (
-                      <div className="transfer-department-options" aria-label="Gợi ý khoa/phòng nhận">
-                        {departmentSuggestions.map(dept => (
+                  <select className="filter-select request-select" value={deviceId} onChange={e => setDeviceId(e.target.value)} required>
+                    <option value="" disabled>-- Chọn thiết bị --</option>
+                    {transferableDevices.map((device, index) => (
+                      <option key={`${device.id}-${index}`} value={device.id}>{device.id} - {device.name}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <select className="filter-select request-select" value={deviceType} onChange={e => setDeviceType(e.target.value)} required>
+                    <option value="" disabled>-- Chọn loại trang thiết bị theo HIS --</option>
+                    {borrowDeviceTypes.map(type => (
+                      <option key={type} value={type}>{type}</option>
+                    ))}
+                  </select>
+                )}
+                {transferType !== 'Trả' && (
+                  <div className="transfer-ai-panel" aria-live="polite">
+                    <div className="transfer-ai-heading">
+                      <span className="transfer-ai-icon"><Sparkles size={16} /></span>
+                      <div>
+                        <strong>AI đề xuất thiết bị trống cùng loại</strong>
+                        <small>Luôn giữ tối thiểu 1 thiết bị cùng loại tại HSCC và Nhi.</small>
+                      </div>
+                    </div>
+                    {stockGuardViolation && (
+                      <div className="transfer-stock-warning">
+                        <ShieldCheck size={16} />
+                        <span>{stockGuardViolation.department} chỉ còn 1 thiết bị cùng loại. Chọn thiết bị khác trong gợi ý bên dưới.</span>
+                      </div>
+                    )}
+                    {transferRecommendations.length > 0 ? (
+                      <div className="transfer-ai-options">
+                        {transferRecommendations.map(recommendation => (
                           <button
-                            key={dept}
+                            key={recommendation.device.id}
                             type="button"
-                            className={`transfer-department-option ${toDepartment === dept ? 'active' : ''}`}
-                            aria-pressed={toDepartment === dept}
-                            onClick={() => setToDepartment(dept)}
+                            className="transfer-ai-option"
+                            onClick={() => setDeviceType(String(recommendation.device.name || deviceType))}
                           >
-                            {dept}
+                            <span>
+                              <strong>{recommendation.device.id} - {recommendation.device.name}</strong>
+                              <small>{recommendation.device.department || 'Chưa rõ khoa'} · {recommendation.reason}</small>
+                            </span>
+                            <ShieldCheck size={16} />
                           </button>
                         ))}
                       </div>
+                    ) : (
+                      <p className="request-field-hint">Chưa có thiết bị trống cùng loại phù hợp với ràng buộc tồn tối thiểu.</p>
                     )}
                   </div>
+                )}
+              </div>
+              <div className="info-grid request-info-grid">
+                <div className="info-item">
+                  <span className="info-label">{transferType === 'Trả' ? 'Vị trí thiết bị' : 'Luồng xử lý'}</span>
+                  <span className="info-value">{transferType === 'Trả' ? (selectedDevice?.department || '—') : 'Khoa yêu cầu chọn loại, admin chọn máy cụ thể'}</span>
+                </div>
+                <div className="info-item"><span className="info-label">Người tạo yêu cầu</span><span className="info-value">{userName || username} ({userDepartment})</span></div>
+              </div>
+              <div className="request-field">
+                <label className="input-label" htmlFor="transfer-to-department">{transferType === 'Trả' ? 'Khoa/phòng nhận' : 'Khoa yêu cầu mượn'}</label>
+                {transferType === 'Trả' ? (
+                  <Input id="transfer-to-department" value={toDepartment} readOnly disabled required style={{ backgroundColor: 'var(--surface-50)' }} />
                 ) : (
                   <Input id="transfer-to-department" value={userDepartment} readOnly disabled required style={{ backgroundColor: 'var(--surface-50)' }} />
                 )}
@@ -676,7 +770,11 @@ const Transfers: React.FC<TransfersProps> = ({ defaultTab = 'requests' }) => {
                 ) : visibleTransfers.map(transfer => (
                   <TableRow key={transfer.transferId}>
                     <TableCell><strong>{transfer.transferId}</strong><br /><small>{transfer.createdAt || transfer.requestedAt}</small></TableCell>
-                    <TableCell><strong>{transfer.deviceName || transfer.deviceId}</strong><br /><small>{transfer.deviceId}</small></TableCell>
+                    <TableCell>
+                      <strong>{transfer.deviceName || transfer.deviceType || transfer.deviceId}</strong>
+                      <br />
+                      <small>{transfer.deviceId || 'Chờ admin chọn máy'}</small>
+                    </TableCell>
                     <TableCell>{transfer.fromDepartment}<br /><strong>→ {transfer.toDepartment}</strong></TableCell>
                     <TableCell>
                       {transfer.requestedByName || transfer.requestedBy}
@@ -686,7 +784,31 @@ const Transfers: React.FC<TransfersProps> = ({ defaultTab = 'requests' }) => {
                     </TableCell>
                     <TableCell><Badge variant={getTransferStatusVariant(transfer.status)}>{transferStatusText[transfer.status] || transfer.status}</Badge></TableCell>
                     <TableCell>
-                      {transfer.status === 'PENDING_RECEIVE' && (activeTab === 'requests' || isAdmin) ? (
+                      {transfer.status === 'PENDING_ASSIGN' && isAdmin ? (
+                        <div className="transfer-assign-control">
+                          <select
+                            className="filter-select"
+                            value={assignmentDeviceIds[transfer.transferId] || ''}
+                            onChange={e => setAssignmentDeviceIds(current => ({ ...current, [transfer.transferId]: e.target.value }))}
+                            aria-label="Chọn máy cụ thể"
+                          >
+                            <option value="">Chọn máy cụ thể</option>
+                            {getAssignmentRecommendations(transfer).map(recommendation => (
+                              <option key={recommendation.device.id} value={recommendation.device.id}>
+                                {recommendation.device.id} - {recommendation.device.name} ({recommendation.device.department})
+                              </option>
+                            ))}
+                          </select>
+                          <Button
+                            size="sm"
+                            variant="primary"
+                            disabled={assigningTransferId === transfer.transferId}
+                            onClick={() => handleAssignDevice(transfer)}
+                          >
+                            {assigningTransferId === transfer.transferId ? 'Đang gán...' : 'Gán máy'}
+                          </Button>
+                        </div>
+                      ) : transfer.status === 'PENDING_RECEIVE' && (activeTab === 'requests' || isAdmin) ? (
                         <div style={{ display: 'flex', gap: '8px' }}>
                           {(isAdmin || transfer.toDepartment === userDepartment) && (
                             <Button size="sm" variant="success" icon={<CheckCircle size={14} />} onClick={() => handleReceiveClick(transfer)}>Nhận</Button>

@@ -11,10 +11,15 @@ node_modules
 dist
 dist-ssr
 tmp/
+.codegraph/
 *.local
 .env
 .env.*
 !.env.example
+!LightRAG-main/.env.huggingface
+__pycache__/
+*.pyc
+*.zip
 
 # Editor directories and files
 .vscode/*

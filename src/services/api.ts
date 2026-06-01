@@ -77,6 +77,7 @@ export interface TransferData {
   createdAt: string;
   deviceId: string;
   deviceName: string;
+  deviceType: string;
   fromDepartment: string;
   toDepartment: string;
   quantity: string;
@@ -322,6 +323,7 @@ const mapTransfer = (item: ApiRow): TransferData => ({
   createdAt: getText(item, ['CreatedAt', 'Thời gian']),
   deviceId: getText(item, ['DeviceId', 'Mã Máy/Thiết bị']),
   deviceName: getText(item, ['DeviceName', 'Tên Thiết bị']),
+  deviceType: getText(item, ['DeviceType', 'Loại thiết bị']),
   fromDepartment: getText(item, ['FromDepartment', 'Từ khoa/phòng']),
   toDepartment: getText(item, ['ToDepartment', 'Đến khoa/phòng']),
   quantity: getText(item, ['Quantity', 'Số lượng']),
@@ -361,6 +363,28 @@ export const createTransfer = async (payload: {
   imageMimeType?: string;
 }) => {
   return postAction('createTransfer', payload);
+};
+
+export const createTransferTypeRequest = async (payload: {
+  deviceType: string;
+  toDepartment: string;
+  quantity?: string;
+  reason?: string;
+  actorUsername: string;
+  imageContent?: string;
+  imageName?: string;
+  imageMimeType?: string;
+}) => {
+  return postAction('createTransferTypeRequest', payload);
+};
+
+export const assignTransferDevice = async (payload: {
+  transferId: string;
+  deviceId: string;
+  actorUsername: string;
+  note?: string;
+}) => {
+  return postAction('assignTransferDevice', payload);
 };
 
 export const receiveTransfer = async (payload: { transferId: string; actorUsername: string; note?: string; imageContent?: string; imageName?: string; imageMimeType?: string }) => {

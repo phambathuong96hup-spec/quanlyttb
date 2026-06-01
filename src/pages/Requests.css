@@ -481,6 +481,139 @@
   color: var(--request-accent);
 }
 
+.transfer-ai-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #d8e3ea;
+  border-radius: 8px;
+  background:
+    linear-gradient(90deg, rgba(37, 99, 235, 0.07) 0 3px, transparent 3px),
+    #f8fafc;
+}
+
+.transfer-ai-heading {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.transfer-ai-icon {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  background: #eff6ff;
+  color: var(--accent);
+}
+
+.transfer-ai-heading strong,
+.transfer-ai-heading small {
+  display: block;
+  min-width: 0;
+}
+
+.transfer-ai-heading strong {
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  font-weight: 820;
+}
+
+.transfer-ai-heading small {
+  margin-top: 2px;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.transfer-stock-warning {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+  background: #fffbeb;
+  color: #92400e;
+  font-size: 0.8rem;
+  font-weight: 760;
+}
+
+.transfer-ai-options {
+  display: grid;
+  gap: 8px;
+}
+
+.transfer-ai-option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  padding: 10px;
+  border: 1px solid #d1dde7;
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--text-primary);
+  font-family: inherit;
+  text-align: left;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast), background var(--transition-fast);
+}
+
+.transfer-ai-option:hover,
+.transfer-ai-option:focus-visible {
+  border-color: #bfdbfe;
+  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.1);
+  outline: none;
+}
+
+.transfer-ai-option.active,
+.transfer-ai-option[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: #eff6ff;
+}
+
+.transfer-ai-option strong,
+.transfer-ai-option small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.transfer-ai-option strong {
+  color: var(--text-primary);
+  font-size: 0.84rem;
+  font-weight: 820;
+  white-space: nowrap;
+}
+
+.transfer-ai-option small {
+  margin-top: 2px;
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.transfer-assign-control {
+  display: grid;
+  grid-template-columns: minmax(190px, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.transfer-assign-control .filter-select {
+  min-height: 34px;
+  font-size: 0.8rem;
+}
+
 @media (max-width: 860px) {
   .request-type-switch {
     grid-template-columns: 1fr;

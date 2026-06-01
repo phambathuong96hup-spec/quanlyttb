@@ -95,6 +95,7 @@ export const getRepairStatusVariant = (status: string): BadgeVariant => {
 // ──────────────────────────────────────────────────
 
 export const TRANSFER_STATUS = {
+  PENDING_ASSIGN: 'PENDING_ASSIGN',
   PENDING_RECEIVE: 'PENDING_RECEIVE',
   COMPLETED: 'COMPLETED',
   RECEIVED: 'RECEIVED',
@@ -106,6 +107,7 @@ export type TransferStatus = typeof TRANSFER_STATUS[keyof typeof TRANSFER_STATUS
 
 /** Human-readable labels for transfer statuses. */
 export const transferStatusText: Record<string, string> = {
+  [TRANSFER_STATUS.PENDING_ASSIGN]: 'Chờ admin chọn máy',
   [TRANSFER_STATUS.PENDING_RECEIVE]: 'Chờ khoa nhận',
   [TRANSFER_STATUS.COMPLETED]: 'Đã nhận',
   [TRANSFER_STATUS.RECEIVED]: 'Đã nhận',
@@ -117,6 +119,7 @@ export const transferStatusText: Record<string, string> = {
 export const getTransferStatusVariant = (status: string): BadgeVariant => {
   if (status === TRANSFER_STATUS.COMPLETED || status === TRANSFER_STATUS.RECEIVED) return 'success';
   if (status === TRANSFER_STATUS.REJECTED || status === TRANSFER_STATUS.CANCELLED) return 'danger';
+  if (status === TRANSFER_STATUS.PENDING_ASSIGN) return 'primary';
   if (status === TRANSFER_STATUS.PENDING_RECEIVE) return 'warning';
   return 'neutral';
 };

@@ -71,6 +71,7 @@ const TRANSFER_HEADERS = [
   'CreatedAt',
   'DeviceId',
   'DeviceName',
+  'DeviceType',
   'FromDepartment',
   'ToDepartment',
   'Quantity',
@@ -181,6 +182,16 @@ function route_(action, payload) {
       if (!actor) return authError_();
       payload.actorUsername = userUsername_(actor);
       return createTransfer_(payload);
+    case 'createTransferTypeRequest':
+      actor = requireAuthenticated_(payload);
+      if (!actor) return authError_();
+      payload.actorUsername = userUsername_(actor);
+      return createTransferTypeRequest_(payload);
+    case 'assignTransferDevice':
+      actor = requireAdmin_(payload);
+      if (!actor) return authError_('Chỉ Admin được chọn máy cụ thể cho phiếu luân chuyển.');
+      payload.actorUsername = userUsername_(actor);
+      return assignTransferDevice_(payload);
     case 'receiveTransfer':
       actor = requireAuthenticated_(payload);
       if (!actor) return authError_();
@@ -758,6 +769,121 @@ function createTransfer_(payload) {
   });
 
   return { success: true, message: 'Đã gửi yêu cầu luân chuyển sang ' + toDepartment + '. Chờ khoa nhận xác nhận.', transferId };
+}
+
+function createTransferTypeRequest_(payload) {
+  const deviceType = String(payload.deviceType || '').trim();
+  const toDepartment = String(payload.toDepartment || '').trim();
+  const actor = findUser_(payload.actorUsername);
+  if (!deviceType || !toDepartment) return { success: false, message: 'Thiếu loại thiết bị hoặc khoa/phòng nhận.' };
+  if (!actor) return { success: false, message: 'Không xác thực được người tạo yêu cầu.' };
+
+  const imageUrl = uploadImageToDrive_(payload, 'AnhYeuCauLuanChuyen');
+  let reqNote = payload.reason || payload.note || '';
+  if (imageUrl) {
+    reqNote += '\n[Ảnh minh chứng yêu cầu]: ' + imageUrl;
+  }
+
+  const transferId = nextTransferId_();
+  const now = new Date();
+  appendObject_(SHEETS.transfers, {
+    TransferId: transferId,
+    CreatedAt: now,
+    DeviceId: '',
+    DeviceName: deviceType,
+    DeviceType: deviceType,
+    FromDepartment: 'Chờ Admin chọn',
+    ToDepartment: toDepartment,
+    Quantity: payload.quantity || 1,
+    Status: 'PENDING_ASSIGN',
+    RequestedBy: userUsername_(actor),
+    RequestedByName: userDisplayName_(actor),
+    RequestedByEmail: userEmail_(actor),
+    RequestedNote: reqNote,
+    RequestedAt: now,
+    UpdatedAt: now
+  });
+
+  return { success: true, message: 'Đã gửi yêu cầu theo loại thiết bị. Chờ Admin chọn máy cụ thể.', transferId };
+}
+
+function assignTransferDevice_(payload) {
+  const actor = findUser_(payload.actorUsername);
+  if (!actor || !isAdmin_(actor)) return { success: false, message: 'Chỉ Admin được chọn máy cụ thể.' };
+  const rowIndex = findTransferRow_(payload.transferId);
+  if (rowIndex < 2) return { success: false, message: 'Không tìm thấy yêu cầu luân chuyển.' };
+
+  const transfer = rowObject_(SHEETS.transfers, rowIndex);
+  if (transfer.Status !== 'PENDING_ASSIGN') return { success: false, message: 'Yêu cầu này không còn chờ Admin chọn máy.' };
+
+  const deviceId = String(payload.deviceId || '').trim();
+  const deviceRow = findDeviceRow_(deviceId);
+  if (deviceRow < 2) return { success: false, message: 'Không tìm thấy thiết bị Admin chọn.' };
+
+  const device = rowObject_(SHEETS.devices, deviceRow);
+  const fromDepartment = device['Nơi đặt thiết bị'] || '';
+  if (normalize_(fromDepartment) === normalize_(transfer.ToDepartment)) {
+    return { success: false, message: 'Khoa nhận đang trùng với khoa hiện tại của thiết bị.' };
+  }
+  const stockGuardMessage = transferStockGuardMessage_(device, transfer.ToDepartment);
+  if (stockGuardMessage) return { success: false, message: stockGuardMessage };
+
+  const now = new Date();
+  const note = [transfer.RequestedNote || '', payload.note ? '[Admin chọn máy]: ' + payload.note : ''].filter(Boolean).join('\n');
+  updateRowByObject_(SHEETS.transfers, rowIndex, {
+    DeviceId: deviceId,
+    DeviceName: device['Tên Thiết bị'] || device.name || transfer.DeviceType || '',
+    FromDepartment: fromDepartment,
+    Status: 'PENDING_RECEIVE',
+    RequestedNote: note,
+    UpdatedAt: now
+  });
+
+  sendTransferMail_({
+    type: 'request',
+    transferId: transfer.TransferId,
+    device,
+    fromDepartment,
+    toDepartment: transfer.ToDepartment,
+    actor,
+    note: note,
+    evidenceUrl: '',
+    evidenceLabel: ''
+  });
+
+  return { success: true, message: 'Đã gán máy cụ thể. Phiếu chuyển sang trạng thái chờ khoa nhận xác nhận.' };
+}
+
+function transferStockGuardMessage_(device, toDepartment) {
+  const sourceDepartment = String(device['Nơi đặt thiết bị'] || '').trim();
+  if (!sourceDepartment || normalize_(sourceDepartment) === normalize_(toDepartment)) return '';
+
+  const guarded = guardedTransferDepartment_(sourceDepartment);
+  if (!guarded) return '';
+
+  const deviceType = normalizeTransferDeviceType_(device);
+  if (!deviceType) return '';
+
+  const sameTypeRows = getRows_(SHEETS.devices).filter(row => {
+    if (normalize_(row['Nơi đặt thiết bị'] || '') !== normalize_(sourceDepartment)) return false;
+    if (normalizeTransferDeviceType_(row) !== deviceType) return false;
+    const status = normalize_(row['Hiện trạng thực tế'] || row.status || '');
+    return status.indexOf('hong') === -1 && status.indexOf('sua') === -1 && status.indexOf('chua phan bo') === -1;
+  });
+
+  if (sameTypeRows.length - 1 >= 1) return '';
+  return guarded + ' phải còn ít nhất 1 thiết bị cùng loại sau luân chuyển.';
+}
+
+function guardedTransferDepartment_(department) {
+  const normalized = normalize_(department);
+  if (normalized.indexOf('cap cuu') !== -1 && normalized.indexOf('hoi suc') !== -1) return 'HSCC';
+  if (normalized.indexOf('khoa nhi') !== -1) return 'Nhi';
+  return '';
+}
+
+function normalizeTransferDeviceType_(device) {
+  return normalize_(device.DeviceType || device['Loại thiết bị'] || device['Tên Thiết bị'] || device.name || '');
 }
 
 function receiveTransfer_(payload) {
