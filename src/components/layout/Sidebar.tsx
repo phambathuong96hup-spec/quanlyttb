@@ -10,6 +10,7 @@ import {
   Thermometer,
   Lock,
   Wrench,
+  BotMessageSquare,
 } from 'lucide-react';
 import { useAuth } from '../../authContext';
 import './Sidebar.css';
@@ -85,6 +86,33 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
           </div>
         )}
         {privateItems.map((item) => {
+          const Icon = item.icon;
+          const locked = !isAuthenticated;
+          return (
+            <NavLink
+              key={item.path}
+              to={item.path}
+              className={({ isActive }) =>
+                `nav-item ${isActive ? 'active' : ''} ${locked ? 'nav-item-locked' : ''}`
+              }
+              title={!isOpen ? (locked ? `${item.name} (Cần đăng nhập)` : item.name) : undefined}
+              onClick={(e) => handlePrivateClick(e, item.path, item.private)}
+            >
+              <Icon size={20} className="nav-icon" />
+              <span className="nav-text">{item.name}</span>
+              {locked && isOpen && (
+                <Lock size={13} className="nav-lock-icon" />
+              )}
+            </NavLink>
+          );
+        })}
+        {/* Label section: AI */}
+        {isOpen && (
+          <div className="sidebar-section-label" style={{ marginTop: '8px' }}>
+            Trí tuệ nhân tạo
+          </div>
+        )}
+        {[{ path: '/ai-assistant', name: 'AI Trợ lý', icon: BotMessageSquare, private: true }].map((item) => {
           const Icon = item.icon;
           const locked = !isAuthenticated;
           return (

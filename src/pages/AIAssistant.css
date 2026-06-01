@@ -1,0 +1,27 @@
+.ai-assistant-page {
+  width: 100%;
+  height: calc(100vh - var(--header-height) - 24px);
+  min-height: 450px;
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.ai-space-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 450px;
+  border: 0;
+  background: #fff;
+}
+
+@media (max-width: 899px) {
+  .ai-assistant-page {
+    height: calc(100vh - var(--header-height) - 12px);
+    border-radius: 0;
+    border-left: 0;
+    border-right: 0;
+  }
+}
