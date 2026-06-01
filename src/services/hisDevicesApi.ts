@@ -131,11 +131,15 @@ export const unwrapHisDevicesResponse = <T>(body: ApiEnvelope<T> | T): T => {
   return body as T;
 };
 
-const fetchHisDevices = async <T>(path: string, params?: Record<string, string | number | undefined | null>) => {
+const fetchHisDevices = async <T>(
+  path: string,
+  params?: Record<string, string | number | undefined | null>,
+  baseUrl?: string
+) => {
   const controller = new AbortController();
   const timeoutId = window.setTimeout(() => controller.abort(), HIS_DEVICES_REQUEST_TIMEOUT_MS);
   try {
-    const response = await fetch(buildHisDevicesUrl(path, params), { signal: controller.signal });
+    const response = await fetch(buildHisDevicesUrl(path, params, baseUrl), { signal: controller.signal });
     if (!response.ok) {
       throw new Error(`HIS devices API HTTP ${response.status}`);
     }
@@ -158,11 +162,25 @@ export const fetchHisDashboardStats = (dept?: string) => {
 export const fetchHisDepartmentDashboard = (filters: {
   dept?: string;
   category?: string;
-} = {}) => {
+} = {}, baseUrl?: string) => {
   return fetchHisDevices<HisDepartmentDashboard>('/api/dashboard/departments', {
     dept: filters.dept,
     category: filters.category,
-  });
+  }, baseUrl);
+};
+
+export const fetchHisDepartmentDashboardOptional = async (filters: {
+  dept?: string;
+  category?: string;
+} = {}, baseUrl?: string) => {
+  try {
+    return await fetchHisDepartmentDashboard(filters, baseUrl);
+  } catch (err) {
+    if (err instanceof Error && /HTTP 404/.test(err.message)) {
+      return null;
+    }
+    throw err;
+  }
 };
 
 export const fetchHisDeviceUsages = (filters: {

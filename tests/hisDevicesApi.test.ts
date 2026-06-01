@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   buildHisDevicesUrl,
   fetchHisDepartmentDashboard,
+  fetchHisDepartmentDashboardOptional,
   getHisDevicesApiBaseUrl,
   unwrapHisDevicesResponse,
   type HisDashboardStats,
@@ -32,6 +33,21 @@ test('his devices API builds department dashboard endpoint filters', () => {
 
   assert.equal(url, 'http://127.0.0.1:8997/api/dashboard/departments?dept=NHI&category=MONITOR');
   assert.equal(typeof fetchHisDepartmentDashboard, 'function');
+});
+
+test('his devices API treats missing department dashboard endpoint as optional', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWindow = (globalThis as typeof globalThis & { window?: typeof globalThis }).window;
+  (globalThis as typeof globalThis & { window?: typeof globalThis }).window = globalThis;
+  globalThis.fetch = async () => new Response('Not Found', { status: 404 });
+
+  try {
+    const dashboard = await fetchHisDepartmentDashboardOptional({}, 'http://127.0.0.1:8997');
+    assert.equal(dashboard, null);
+  } finally {
+    globalThis.fetch = originalFetch;
+    (globalThis as typeof globalThis & { window?: typeof globalThis }).window = originalWindow;
+  }
 });
 
 test('his devices API dashboard contracts include maintenance and department summaries', () => {

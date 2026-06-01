@@ -7,7 +7,7 @@ import {
   fetchHisCategories,
   fetchHisDashboardStats,
   fetchHisDepartments,
-  fetchHisDepartmentDashboard,
+  fetchHisDepartmentDashboardOptional,
   fetchHisDeviceUsages,
   fetchHisSyncStatus,
   getHisDevicesApiBaseUrl,
@@ -105,7 +105,7 @@ const HisDevices: React.FC = () => {
     try {
       const [nextStats, nextDepartmentDashboard, nextUsages, nextDepartments, nextCategories, nextSyncStatus] = await Promise.all([
         fetchHisDashboardStats(selectedDept),
-        fetchHisDepartmentDashboard({ dept: selectedDept, category: selectedCategory }),
+        fetchHisDepartmentDashboardOptional({ dept: selectedDept, category: selectedCategory }),
         fetchHisDeviceUsages({ dept: selectedDept, category: selectedCategory, search: submittedSearch, page: 1, limit: 100 }),
         fetchHisDepartments(),
         fetchHisCategories(),
