@@ -11,7 +11,8 @@ test('transfer requests are created by device type before admin assigns a concre
   assert.match(frontend, /assignTransferDevice/);
   assert.match(frontend, /Chờ admin chọn máy/);
   assert.match(frontend, /Mượn loại trang thiết bị gì/);
-  assert.match(frontend, /fetchHisCategories/);
+  assert.match(frontend, /const deviceTypes = useMemo/);
+  assert.doesNotMatch(frontend, /fetchHisCategories/);
   assert.doesNotMatch(frontend, /Cho mượn \/ Luân chuyển đi/);
   assert.match(api, /createTransferTypeRequest/);
   assert.match(api, /assignTransferDevice/);

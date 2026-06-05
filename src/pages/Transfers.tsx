@@ -17,7 +17,6 @@ import { useAuth } from '../authContext';
 import { exportCsv } from '../utils/exportCsv';
 import { buildTransferRecommendations, getTransferStockGuardViolation } from '../utils/transferRecommendations';
 import { stripEvidenceLinks } from '../utils/evidenceUtils';
-import { fetchHisCategories, type HisCategory } from '../services/hisDevicesApi';
 import { EvidenceLinks } from '../components/EvidenceLinks';
 import { Html5Qrcode } from 'html5-qrcode';
 import jsPDF from 'jspdf';
@@ -60,7 +59,6 @@ const Transfers: React.FC<TransfersProps> = ({ defaultTab = 'requests' }) => {
   const [isReceiving, setIsReceiving] = useState(false);
   const [assigningTransferId, setAssigningTransferId] = useState('');
   const [assignmentDeviceIds, setAssignmentDeviceIds] = useState<Record<string, string>>({});
-  const [hisCategories, setHisCategories] = useState<HisCategory[]>([]);
 
   const readFileAsBase64 = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
@@ -100,12 +98,6 @@ const Transfers: React.FC<TransfersProps> = ({ defaultTab = 'requests' }) => {
   }, [loadData]);
 
   useEffect(() => {
-    fetchHisCategories()
-      .then(categories => setHisCategories(Array.isArray(categories) ? categories : []))
-      .catch(() => setHisCategories([]));
-  }, []);
-
-  useEffect(() => {
     setSearchQuery('');
     setStatusFilter('all');
     setDeptFilter('all');
@@ -139,10 +131,9 @@ const Transfers: React.FC<TransfersProps> = ({ defaultTab = 'requests' }) => {
       .sort((first, second) => first.localeCompare(second, 'vi'));
   }, [devices]);
   const borrowDeviceTypes = useMemo(() => {
-    const hisTypes = hisCategories.map(category => category.name.trim()).filter(Boolean);
-    return Array.from(new Set([...hisTypes, ...deviceTypes]))
+    return Array.from(new Set(deviceTypes))
       .sort((first, second) => first.localeCompare(second, 'vi'));
-  }, [deviceTypes, hisCategories]);
+  }, [deviceTypes]);
 
   const startScanner = useCallback(async () => {
     setScanResult('');
@@ -520,7 +511,7 @@ const Transfers: React.FC<TransfersProps> = ({ defaultTab = 'requests' }) => {
               </div>
               <div className="transfer-summary-info request-summary-content">
                 <h3>Yêu cầu mượn trang thiết bị</h3>
-                <p>Chọn loại trang thiết bị theo danh mục HIS; Admin quyết định máy cụ thể và khoa xuất.</p>
+                <p>Chọn loại trang thiết bị cần mượn; Admin quyết định máy cụ thể và khoa xuất.</p>
               </div>
             </div>
 
@@ -577,7 +568,7 @@ const Transfers: React.FC<TransfersProps> = ({ defaultTab = 'requests' }) => {
                   </select>
                 ) : (
                   <select className="filter-select request-select" value={deviceType} onChange={e => setDeviceType(e.target.value)} required>
-                    <option value="" disabled>-- Chọn loại trang thiết bị theo HIS --</option>
+                    <option value="" disabled>-- Chọn loại trang thiết bị --</option>
                     {borrowDeviceTypes.map(type => (
                       <option key={type} value={type}>{type}</option>
                     ))}

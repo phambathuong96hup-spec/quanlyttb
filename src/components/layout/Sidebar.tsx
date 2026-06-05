@@ -10,7 +10,6 @@ import {
   Lock,
   Wrench,
   BotMessageSquare,
-  HeartPulse,
 } from 'lucide-react';
 import { useAuth } from '../../authContext';
 import './Sidebar.css';
@@ -31,7 +30,6 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
   const privateItems = [
     { path: '/requests', name: 'Tạo yêu cầu', icon: ClipboardPlus, private: true },
     { path: '/tracking', name: 'Theo dõi thiết bị', icon: Wrench, private: true },
-    { path: '/his-devices', name: 'Thiết bị HIS', icon: HeartPulse, private: true },
     { path: '/operations', name: 'Điều hành công việc', icon: ClipboardCheck, private: true },
     { path: '/reports', name: 'Thống kê & báo cáo', icon: PieChart, private: true },
   ];

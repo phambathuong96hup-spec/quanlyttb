@@ -3,7 +3,7 @@ import { approveRepair, createTransfer, type RepairData, type TransferData } fro
 import { useRepairs } from '../hooks/useRepairs';
 import { useTransfers } from '../hooks/useTransfers';
 import { Card, CardHeader, CardBody, Table, TableHead, TableBody, TableRow, TableHeader, TableCell, Badge, useToast, ConfirmDialog, Button } from '../components/ui';
-import { CheckCircle, Clock, Search, Wrench, Activity, XCircle, HeartPulse } from 'lucide-react';
+import { CheckCircle, Clock, Search, Wrench, Activity, XCircle } from 'lucide-react';
 import { useAuth } from '../authContext';
 import {
   getRepairStatusVariant,
@@ -16,7 +16,6 @@ import {
 } from '../utils/statusUtils';
 import { stripEvidenceLinks } from '../utils/evidenceUtils';
 import { EvidenceLinks } from '../components/EvidenceLinks';
-import HisDevices from './HisDevices';
 import './TrackDevices.css';
 
 const TrackDevices: React.FC = () => {
@@ -40,7 +39,7 @@ const TrackDevices: React.FC = () => {
     return reversedTransfers.filter(t => t.fromDepartment === department || t.toDepartment === department || t.requestedBy === username);
   }, [reversedTransfers, isAdmin, department, username]);
 
-  const [activeTab, setActiveTab] = useState<'repairs' | 'transfers' | 'his'>('his');
+  const [activeTab, setActiveTab] = useState<'repairs' | 'transfers'>('repairs');
 
   // Confirm dialog state for Repairs
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -107,7 +106,7 @@ const TrackDevices: React.FC = () => {
           <Activity size={28} style={{ color: 'var(--primary)' }} />
           Theo dõi thiết bị
         </h1>
-        <p className="dashboard-subtitle">Theo dõi trực tiếp HIS, tiến độ sửa chữa và luân chuyển thiết bị</p>
+        <p className="dashboard-subtitle">Theo dõi tiến độ sửa chữa và luân chuyển thiết bị</p>
       </div>
 
       <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
@@ -123,16 +122,7 @@ const TrackDevices: React.FC = () => {
         >
           Lịch sử luân chuyển
         </Button>
-        <Button
-          variant={activeTab === 'his' ? 'primary' : 'secondary'}
-          icon={<HeartPulse size={16} />}
-          onClick={() => setActiveTab('his')}
-        >
-          Theo dõi HIS trực tiếp
-        </Button>
       </div>
-
-      {activeTab === 'his' && <HisDevices />}
 
       {activeTab === 'repairs' && (
         <Card>
