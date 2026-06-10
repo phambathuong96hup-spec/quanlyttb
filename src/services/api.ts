@@ -4,7 +4,7 @@ import { parseVietnameseDate } from '../utils/dateUtils';
 import devicesSnapshot from '../data/devices.snapshot.json';
 
 // WARNING: Hardcoding the GAS URL/key here is a security risk. In production, always use env variables.
-const DEFAULT_GOOGLE_SHEETS_API_URL = 'https://script.google.com/macros/s/AKfycbwLcdYjEyM_la4W7I821vKjVosT3jVZDc3g7Efrue0m7KCpXO34DE8wyJWmfI9bePGr/exec';
+const DEFAULT_GOOGLE_SHEETS_API_URL = 'https://script.google.com/macros/s/AKfycbzHzDXD7Ai6a4rgaNxM0baVnLZPp9kqt3FJS_ljI1NgPuN5_KdJgBW9nbEre7rNp7QOxw/exec';
 
 export const GOOGLE_SHEETS_API_URL = import.meta.env.VITE_THIET_BI_API_URL || DEFAULT_GOOGLE_SHEETS_API_URL;
 const USE_LOCAL_SNAPSHOT = import.meta.env.VITE_USE_LOCAL_SNAPSHOT === 'true';
