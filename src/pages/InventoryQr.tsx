@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { ClipboardCheck, Download, PackageCheck, Plus, QrCode, Search, XCircle } from 'lucide-react';
+import { ClipboardCheck, Download, PackageCheck, Plus, QrCode, RefreshCw, Search, XCircle } from 'lucide-react';
 import { Badge, Button, Card, CardBody, CardHeader, Input, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, useToast } from '../components/ui';
 import { useDevices } from '../hooks/useDevices';
 import { useAuth } from '../authContext';
@@ -91,6 +91,13 @@ const formatDateTime = (value: string) => {
     hour: '2-digit',
     minute: '2-digit',
   }).format(date);
+};
+
+const inventorySyncFailureMessage = (message?: string) => {
+  if (message?.includes('Action không hợp lệ: saveInventoryRun')) {
+    return 'Google Apps Script chưa được deploy action saveInventoryRun. Dữ liệu đã lưu tạm trên máy này, hãy cập nhật Code.gs rồi bấm Đồng bộ lại.';
+  }
+  return message || 'Chưa đồng bộ được Google Sheets. Dữ liệu đã lưu tạm trên máy này.';
 };
 
 const InventoryQr: React.FC = () => {
@@ -198,11 +205,11 @@ const InventoryQr: React.FC = () => {
         return response.sheetName || run.sheetName || '';
       }
       persistRuns(mergePendingRun(baseRuns, run));
-      toast.warning(response.message || 'Chưa đồng bộ được Google Sheets. Dữ liệu đã lưu tạm trên máy này.');
+      toast.warning(inventorySyncFailureMessage(response.message));
       return '';
     } catch {
       persistRuns(mergePendingRun(baseRuns, run));
-      toast.warning('Chưa đồng bộ được Google Sheets. Dữ liệu đã lưu tạm trên máy này.');
+      toast.warning(inventorySyncFailureMessage());
       return '';
     } finally {
       setIsSyncing(false);
@@ -278,6 +285,14 @@ const InventoryQr: React.FC = () => {
     toast.success(sheetName ? `Đã khóa đợt kiểm kê và cập nhật Google Sheets: ${sheetName}` : 'Đã khóa đợt kiểm kê.');
   };
 
+  const handleRetrySync = async () => {
+    if (!activeRun) return;
+    const sheetName = await syncRunToGoogleSheets(activeRun, runs);
+    if (sheetName) {
+      toast.success(`Đã đồng bộ lại Google Sheets: ${sheetName}`);
+    }
+  };
+
   const handleExport = () => {
     if (!activeRun) return;
     const scannedRows = activeRun.scans.map((scan, index) => ({
@@ -326,6 +341,11 @@ const InventoryQr: React.FC = () => {
           )}
           {activeRun?.syncStatus === 'pending' && (
             <Badge variant="warning">Chưa đồng bộ</Badge>
+          )}
+          {activeRun?.syncStatus === 'pending' && (
+            <Button variant="secondary" icon={<RefreshCw size={16} />} onClick={handleRetrySync} disabled={isSyncing}>
+              Đồng bộ lại
+            </Button>
           )}
           <Button variant="secondary" icon={<Download size={16} />} onClick={handleExport} disabled={!activeRun}>
             CSV

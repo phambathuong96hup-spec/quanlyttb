@@ -21,6 +21,8 @@ test('inventory QR module is routed, visible in navigation, and supports local s
   assert.match(page, /exportCsv/);
   assert.match(page, /saveInventoryRun/);
   assert.match(page, /sheetName/);
+  assert.match(page, /Đồng bộ lại/);
+  assert.match(page, /Action không hợp lệ: saveInventoryRun/);
   assert.match(api, /export const saveInventoryRun/);
   assert.match(api, /postAction\('saveInventoryRun'/);
   assert.match(gas, /case 'saveInventoryRun'/);
