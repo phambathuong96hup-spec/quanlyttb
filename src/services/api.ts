@@ -411,6 +411,32 @@ export interface GspRecord {
   recorder: string;
 }
 
+export interface InventoryRunSavePayload {
+  runId: string;
+  name: string;
+  department: string;
+  createdAt: string;
+  createdBy: string;
+  status: string;
+  sheetName?: string;
+  expectedCount: number;
+  scans: Array<{
+    deviceId: string;
+    deviceName: string;
+    scannedAt: string;
+    scannedBy: string;
+    expectedDepartment: string;
+    actualDepartment: string;
+    condition: string;
+    note: string;
+  }>;
+  missingDevices: Array<{
+    deviceId: string;
+    deviceName: string;
+    expectedDepartment: string;
+  }>;
+}
+
 export const fetchGspRecords = async (): Promise<GspRecord[]> => {
   if (USE_LOCAL_SNAPSHOT) return [];
 
@@ -429,6 +455,14 @@ export const fetchGspRecords = async (): Promise<GspRecord[]> => {
 
 export const addGspRecord = async (payload: Omit<GspRecord, 'date'>) => {
   return postAction('addGSP', payload);
+};
+
+export const saveInventoryRun = async (payload: InventoryRunSavePayload): Promise<{
+  success: boolean;
+  message?: string;
+  sheetName?: string;
+}> => {
+  return postAction('saveInventoryRun', payload as unknown as Record<string, unknown>);
 };
 
 export const addDocument = async (payload: {

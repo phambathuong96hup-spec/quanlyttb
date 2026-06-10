@@ -4,6 +4,7 @@ const SHEETS = {
   repairs: 'Repairs',
   transfers: 'Transfers',
   gsp: 'GSP',
+  inventoryRuns: 'InventoryRuns',
   documents: 'Documents',
   logs: 'ActivityLogs'
 };
@@ -92,6 +93,32 @@ const TRANSFER_HEADERS = [
   'UpdatedAt'
 ];
 const GSP_HEADERS = ['date', 'shift', 'tempKho', 'tempTuLanh', 'humidity', 'note', 'recorder'];
+const INVENTORY_RUN_HEADERS = [
+  'RunId',
+  'Tên đợt',
+  'SheetName',
+  'Khoa/Phòng',
+  'Người tạo',
+  'Ngày tạo',
+  'Trạng thái',
+  'Tổng thiết bị',
+  'Đã quét',
+  'Chưa quét',
+  'Sai khoa/phòng',
+  'Ngày cập nhật'
+];
+const INVENTORY_DETAIL_HEADERS = [
+  'STT',
+  'Mã thiết bị',
+  'Tên thiết bị',
+  'Khoa quản lý',
+  'Khoa thực tế',
+  'Tình trạng',
+  'Thời gian quét',
+  'Người quét',
+  'Ghi chú',
+  'Loại dòng'
+];
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 
 function doGet(e) {
@@ -217,6 +244,10 @@ function route_(action, payload) {
       if (!actor) return authError_();
       payload.recorder = userDisplayName_(actor);
       return addGSP_(payload);
+    case 'saveInventoryRun':
+      actor = requireAuthenticated_(payload);
+      if (!actor) return authError_();
+      return saveInventoryRun_(payload, actor);
     case 'editUser':
       actor = requireAuthenticated_(payload);
       if (!actor) return authError_();
@@ -358,6 +389,7 @@ function setupSheets() {
   ensureSheet_(SHEETS.repairs, REPAIR_HEADERS);
   ensureSheet_(SHEETS.transfers, TRANSFER_HEADERS);
   ensureSheet_(SHEETS.gsp, GSP_HEADERS);
+  ensureSheet_(SHEETS.inventoryRuns, INVENTORY_RUN_HEADERS);
   ensureSheet_(SHEETS.documents, DOCUMENT_HEADERS);
   ensureSheet_(SHEETS.logs, LOG_HEADERS);
 }
@@ -1408,6 +1440,148 @@ function addGSP_(payload) {
     recorder: payload.recorder
   });
   return { success: true, message: 'Đã lưu nhật ký GSP.' };
+}
+
+function saveInventoryRun_(payload, actor) {
+  const runId = inventoryText_(payload.runId);
+  if (!runId) return { success: false, message: 'Thiếu mã đợt kiểm kê.' };
+
+  const name = inventoryText_(payload.name, runId);
+  const scans = Array.isArray(payload.scans) ? payload.scans : [];
+  const missingDevices = Array.isArray(payload.missingDevices) ? payload.missingDevices : [];
+  const sheetName = inventoryUniqueSheetName_(payload);
+
+  const scanRows = scans.map((scan, index) => ([
+    index + 1,
+    inventoryText_(scan.deviceId),
+    inventoryText_(scan.deviceName),
+    inventoryText_(scan.expectedDepartment, 'Chưa phân bổ'),
+    inventoryText_(scan.actualDepartment),
+    inventoryConditionText_(scan.condition),
+    inventoryDateOrText_(scan.scannedAt),
+    inventoryText_(scan.scannedBy),
+    inventoryText_(scan.note),
+    'Đã quét'
+  ]));
+
+  const missingRows = missingDevices.map((device, index) => ([
+    scanRows.length + index + 1,
+    inventoryText_(device.deviceId),
+    inventoryText_(device.deviceName),
+    inventoryText_(device.expectedDepartment, 'Chưa phân bổ'),
+    '',
+    'Thiết bị chưa quét',
+    '',
+    '',
+    '',
+    'Chưa quét'
+  ]));
+
+  replaceSheetRows_(sheetName, INVENTORY_DETAIL_HEADERS, scanRows.concat(missingRows));
+  upsertInventoryRunRegistry_(payload, actor, sheetName, scans, missingDevices);
+
+  logActivity_(
+    'Lưu kiểm kê',
+    runId,
+    name,
+    'Lưu đợt kiểm kê vào Google Sheets: ' + sheetName,
+    actor
+  );
+
+  return { success: true, message: 'Đã lưu kiểm kê vào Google Sheets.', sheetName: sheetName };
+}
+
+function upsertInventoryRunRegistry_(payload, actor, sheetName, scans, missingDevices) {
+  const runId = inventoryText_(payload.runId);
+  const department = inventoryText_(payload.department) === 'all'
+    ? 'Toàn trung tâm'
+    : inventoryText_(payload.department, 'Chưa phân bổ');
+  const expectedCount = Number(payload.expectedCount) || scans.length + missingDevices.length;
+  const row = {
+    RunId: runId,
+    'Tên đợt': inventoryText_(payload.name, runId),
+    SheetName: sheetName,
+    'Khoa/Phòng': department,
+    'Người tạo': inventoryText_(payload.createdBy, userDisplayName_(actor)),
+    'Ngày tạo': inventoryDateOrText_(payload.createdAt),
+    'Trạng thái': inventoryStatusText_(payload.status),
+    'Tổng thiết bị': expectedCount,
+    'Đã quét': scans.length,
+    'Chưa quét': missingDevices.length,
+    'Sai khoa/phòng': inventoryWrongLocationCount_(scans),
+    'Ngày cập nhật': new Date()
+  };
+
+  const existing = getRowsWithRowIndex_(SHEETS.inventoryRuns)
+    .find(entry => inventoryText_(entry.data.RunId) === runId);
+  if (existing) {
+    updateRowByObject_(SHEETS.inventoryRuns, existing.rowIndex, row);
+  } else {
+    appendObject_(SHEETS.inventoryRuns, row);
+  }
+}
+
+function inventoryUniqueSheetName_(payload) {
+  const wanted = inventorySheetName_(payload);
+  const runId = inventoryText_(payload.runId);
+  const entries = getRowsWithRowIndex_(SHEETS.inventoryRuns);
+  const existing = entries.find(entry => inventoryText_(entry.data.RunId) === runId);
+  if (existing && inventoryText_(existing.data.SheetName)) {
+    return inventorySheetName_({ sheetName: existing.data.SheetName, runId: runId });
+  }
+
+  const hasCollision = entries.some(entry => (
+    inventoryText_(entry.data.RunId) !== runId &&
+    inventorySheetName_({ sheetName: entry.data.SheetName || entry.data['Tên đợt'], runId: runId }) === wanted
+  ));
+  if (!hasCollision) return wanted;
+
+  const suffix = ' - ' + runId.replace(/[^a-zA-Z0-9-]/g, '').slice(-12);
+  const base = wanted.slice(0, Math.max(1, 100 - suffix.length)).trim();
+  return (base + suffix).slice(0, 100);
+}
+
+function inventorySheetName_(payload) {
+  const source = inventoryText_(payload.sheetName || payload.name || payload.runId, 'Kiểm kê');
+  let name = source
+    .replace(/[\[\]\:\*\?\/\\]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!name) name = 'Kiểm kê';
+  if (name.indexOf('KK - ') !== 0) name = 'KK - ' + name;
+  return name.slice(0, 100).trim() || 'KK - Kiểm kê';
+}
+
+function inventoryText_(value, fallback) {
+  const text = String(value === undefined || value === null ? '' : value).trim();
+  return text || (fallback || '');
+}
+
+function inventoryDateOrText_(value) {
+  const text = inventoryText_(value);
+  if (!text) return '';
+  const date = new Date(text);
+  return isNaN(date.getTime()) ? text : date;
+}
+
+function inventoryStatusText_(value) {
+  return inventoryText_(value) === 'closed' ? 'Đã khóa' : 'Đang kiểm kê';
+}
+
+function inventoryConditionText_(value) {
+  const condition = inventoryText_(value);
+  if (condition === 'damaged') return 'Hư hỏng';
+  if (condition === 'maintenance') return 'Cần bảo trì';
+  if (condition === 'wrong_location') return 'Sai khoa/phòng';
+  return 'Đúng vị trí';
+}
+
+function inventoryWrongLocationCount_(scans) {
+  return scans.filter(scan => (
+    inventoryText_(scan.expectedDepartment) &&
+    inventoryText_(scan.actualDepartment) &&
+    inventoryText_(scan.expectedDepartment) !== inventoryText_(scan.actualDepartment)
+  )).length;
 }
 
 function getDepartments_() {
