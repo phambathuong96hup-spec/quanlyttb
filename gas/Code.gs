@@ -248,6 +248,10 @@ function route_(action, payload) {
       actor = requireAuthenticated_(payload);
       if (!actor) return authError_();
       return saveInventoryRun_(payload, actor);
+    case 'deleteInventoryRun':
+      actor = requireAuthenticated_(payload);
+      if (!actor) return authError_();
+      return deleteInventoryRun_(payload, actor);
     case 'editUser':
       actor = requireAuthenticated_(payload);
       if (!actor) return authError_();
@@ -1491,6 +1495,37 @@ function saveInventoryRun_(payload, actor) {
   return { success: true, message: 'Đã lưu kiểm kê vào Google Sheets.', sheetName: sheetName };
 }
 
+function deleteInventoryRun_(payload, actor) {
+  const runId = inventoryText_(payload.runId);
+  if (!runId) return { success: false, message: 'Thiếu mã đợt kiểm kê.' };
+
+  const entries = getRowsWithRowIndex_(SHEETS.inventoryRuns);
+  const existing = entries.find(entry => inventoryText_(entry.data.RunId) === runId);
+  const sheetName = inventoryText_(payload.sheetName || (existing && existing.data.SheetName));
+  const ss = deviceSpreadsheet_();
+
+  if (sheetName && inventoryCanDeleteSheet_(sheetName)) {
+    const sheet = ss.getSheetByName(sheetName);
+    if (sheet && ss.getSheets().length > 1) {
+      ss.deleteSheet(sheet);
+    }
+  }
+
+  if (existing) {
+    ss.getSheetByName(SHEETS.inventoryRuns).deleteRow(existing.rowIndex);
+  }
+
+  logActivity_(
+    'Xóa kiểm kê',
+    runId,
+    sheetName,
+    'Xóa đợt kiểm kê khỏi Google Sheets' + (sheetName ? ': ' + sheetName : ''),
+    actor
+  );
+
+  return { success: true, message: 'Đã xóa đợt kiểm kê.' };
+}
+
 function upsertInventoryRunRegistry_(payload, actor, sheetName, scans, missingDevices) {
   const runId = inventoryText_(payload.runId);
   const department = inventoryText_(payload.department) === 'all'
@@ -1550,6 +1585,11 @@ function inventorySheetName_(payload) {
   if (!name) name = 'Kiểm kê';
   if (name.indexOf('KK - ') !== 0) name = 'KK - ' + name;
   return name.slice(0, 100).trim() || 'KK - Kiểm kê';
+}
+
+function inventoryCanDeleteSheet_(sheetName) {
+  const protectedSheets = Object.keys(SHEETS).map(key => SHEETS[key]);
+  return protectedSheets.indexOf(sheetName) === -1;
 }
 
 function inventoryText_(value, fallback) {

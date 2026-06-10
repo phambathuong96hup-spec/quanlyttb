@@ -465,6 +465,16 @@ export const saveInventoryRun = async (payload: InventoryRunSavePayload): Promis
   return postAction('saveInventoryRun', payload as unknown as Record<string, unknown>);
 };
 
+export const deleteInventoryRun = async (payload: {
+  runId: string;
+  sheetName?: string;
+}): Promise<{
+  success: boolean;
+  message?: string;
+}> => {
+  return postAction('deleteInventoryRun', payload);
+};
+
 export const addDocument = async (payload: {
   serial: string;
   docType: string;

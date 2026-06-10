@@ -1,11 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Camera, ClipboardCheck, Download, FileImage, Keyboard, PackageCheck, Plus, QrCode, RefreshCw, Search, XCircle } from 'lucide-react';
+import { Camera, ClipboardCheck, Download, FileImage, Keyboard, PackageCheck, Plus, QrCode, RefreshCw, Search, Trash2, XCircle } from 'lucide-react';
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 import { Badge, Button, Card, CardBody, CardHeader, Input, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, useToast } from '../components/ui';
 import { useDevices } from '../hooks/useDevices';
 import { useAuth } from '../authContext';
 import { exportCsv } from '../utils/exportCsv';
-import { saveInventoryRun, type DeviceData, type InventoryRunSavePayload } from '../services/api';
+import { deleteInventoryRun, saveInventoryRun, type DeviceData, type InventoryRunSavePayload } from '../services/api';
 import './InventoryQr.css';
 
 const STORAGE_KEY = 'qlttb.inventory_runs';
@@ -411,6 +411,37 @@ const InventoryQr: React.FC = () => {
     }
   };
 
+  const handleDeleteRun = async () => {
+    if (!activeRun) return;
+    const confirmed = window.confirm(`Xóa đợt kiểm kê "${activeRun.name}"? Dữ liệu đã quét của đợt này sẽ bị xóa khỏi danh sách.`);
+    if (!confirmed) return;
+
+    setIsSyncing(true);
+    const nextRuns = runs.filter(run => run.runId !== activeRun.runId);
+    persistRuns(nextRuns);
+    setSelectedRunId(nextRuns[0]?.runId || '');
+
+    if (!activeRun.sheetName) {
+      setIsSyncing(false);
+      toast.success('Đã xóa đợt kiểm kê.');
+      return;
+    }
+
+    try {
+      const response = await deleteInventoryRun({
+        runId: activeRun.runId,
+        sheetName: activeRun.sheetName,
+      });
+      if (response.success) {
+        toast.success('Đã xóa đợt kiểm kê và dữ liệu Google Sheets.');
+      } else {
+        toast.warning(response.message || 'Đã xóa trên máy này, nhưng chưa xóa được dữ liệu Google Sheets.');
+      }
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
   const handleExport = () => {
     if (!activeRun) return;
     const scannedRows = activeRun.scans.map((scan, index) => ({
@@ -498,14 +529,25 @@ const InventoryQr: React.FC = () => {
 
             <label className="inventory-field inventory-run-picker">
               <span>Đợt đang mở</span>
-              <select value={activeRun?.runId || ''} onChange={event => setSelectedRunId(event.target.value)}>
-                {runs.length === 0 && <option value="">Chưa có đợt kiểm kê</option>}
-                {runs.map(run => (
-                  <option key={run.runId} value={run.runId}>
-                    {run.name} - {run.department === 'all' ? 'Toàn trung tâm' : run.department}
-                  </option>
-                ))}
-              </select>
+              <div className="inventory-run-picker-row">
+                <select value={activeRun?.runId || ''} onChange={event => setSelectedRunId(event.target.value)}>
+                  {runs.length === 0 && <option value="">Chưa có đợt kiểm kê</option>}
+                  {runs.map(run => (
+                    <option key={run.runId} value={run.runId}>
+                      {run.name} - {run.department === 'all' ? 'Toàn trung tâm' : run.department}
+                    </option>
+                  ))}
+                </select>
+                <Button
+                  type="button"
+                  variant="danger"
+                  icon={<Trash2 size={16} />}
+                  onClick={handleDeleteRun}
+                  disabled={!activeRun || isSyncing}
+                >
+                  Xóa đợt
+                </Button>
+              </div>
               {activeRun?.sheetName && (
                 <small className="inventory-sync-note">
                   Đang lưu tại Google Sheets: {activeRun.sheetName}

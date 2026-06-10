@@ -162,6 +162,16 @@
   margin-top: 14px;
 }
 
+.inventory-run-picker-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.inventory-run-picker-row .btn {
+  white-space: nowrap;
+}
+
 .inventory-sync-note {
   color: var(--success);
   font-size: 0.78rem;
@@ -280,6 +290,14 @@
 
   .inventory-camera-actions .btn {
     flex: 1 1 140px;
+  }
+
+  .inventory-run-picker-row {
+    grid-template-columns: 1fr;
+  }
+
+  .inventory-run-picker-row .btn {
+    width: 100%;
   }
 
   .inventory-scan-actions .btn {
