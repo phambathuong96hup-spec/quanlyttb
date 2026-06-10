@@ -16,6 +16,11 @@ test('inventory QR module is routed, visible in navigation, and supports local s
   assert.match(page, /qlttb\.inventory_runs/);
   assert.match(page, /Tạo đợt kiểm kê/);
   assert.match(page, /Ghi nhận mã QR/);
+  assert.match(page, /html5-qrcode/);
+  assert.match(page, /Thủ công/);
+  assert.match(page, /Mở camera/);
+  assert.match(page, /Chọn hoặc chụp ảnh mã/);
+  assert.match(page, /scanFile/);
   assert.match(page, /Thiết bị chưa quét/);
   assert.match(page, /Sai khoa\/phòng/);
   assert.match(page, /exportCsv/);

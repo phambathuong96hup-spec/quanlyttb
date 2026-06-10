@@ -1,5 +1,6 @@
-import React, { useMemo, useState } from 'react';
-import { ClipboardCheck, Download, PackageCheck, Plus, QrCode, RefreshCw, Search, XCircle } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Camera, ClipboardCheck, Download, FileImage, Keyboard, PackageCheck, Plus, QrCode, RefreshCw, Search, XCircle } from 'lucide-react';
+import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 import { Badge, Button, Card, CardBody, CardHeader, Input, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, useToast } from '../components/ui';
 import { useDevices } from '../hooks/useDevices';
 import { useAuth } from '../authContext';
@@ -11,6 +12,7 @@ const STORAGE_KEY = 'qlttb.inventory_runs';
 
 type InventoryCondition = 'ok' | 'damaged' | 'maintenance' | 'wrong_location';
 type InventoryStatus = 'active' | 'closed';
+type ScanInputMode = 'manual' | 'camera' | 'image';
 
 interface InventoryScan {
   deviceId: string;
@@ -42,6 +44,20 @@ const conditionText: Record<InventoryCondition, string> = {
   maintenance: 'Cần bảo trì',
   wrong_location: 'Sai khoa/phòng',
 };
+
+const SCANNER_ELEMENT_ID = 'inventory-qr-camera-reader';
+
+const scannerFormats = [
+  Html5QrcodeSupportedFormats.QR_CODE,
+  Html5QrcodeSupportedFormats.CODE_128,
+  Html5QrcodeSupportedFormats.CODE_39,
+  Html5QrcodeSupportedFormats.EAN_13,
+  Html5QrcodeSupportedFormats.EAN_8,
+  Html5QrcodeSupportedFormats.UPC_A,
+  Html5QrcodeSupportedFormats.UPC_E,
+  Html5QrcodeSupportedFormats.ITF,
+  Html5QrcodeSupportedFormats.DATA_MATRIX,
+];
 
 const readRuns = (): InventoryRun[] => {
   try {
@@ -113,6 +129,11 @@ const InventoryQr: React.FC = () => {
   const [condition, setCondition] = useState<InventoryCondition>('ok');
   const [note, setNote] = useState('');
   const [isSyncing, setIsSyncing] = useState(false);
+  const [scanMode, setScanMode] = useState<ScanInputMode>('manual');
+  const [isCameraActive, setIsCameraActive] = useState(false);
+  const [isImageScanning, setIsImageScanning] = useState(false);
+  const scannerRef = useRef<Html5Qrcode | null>(null);
+  const lastDecodedRef = useRef('');
 
   const departments = useMemo(() => (
     Array.from(new Set(devices.map(device => cleanText(device.department, 'Chưa phân bổ')).filter(Boolean)))
@@ -152,6 +173,103 @@ const InventoryQr: React.FC = () => {
   const persistRuns = (nextRuns: InventoryRun[]) => {
     setRuns(nextRuns);
     writeRuns(nextRuns);
+  };
+
+  const stopCamera = useCallback(async () => {
+    const scanner = scannerRef.current;
+    if (!scanner) return;
+    try {
+      if (scanner.isScanning) {
+        await scanner.stop();
+      }
+      scanner.clear();
+    } catch {
+      // Camera cleanup should not block inventory input.
+    } finally {
+      scannerRef.current = null;
+      setIsCameraActive(false);
+    }
+  }, []);
+
+  useEffect(() => () => {
+    void stopCamera();
+  }, [stopCamera]);
+
+  useEffect(() => {
+    if (scanMode !== 'camera') {
+      void stopCamera();
+    }
+  }, [scanMode, stopCamera]);
+
+  const applyDecodedCode = useCallback((decodedText: string, source: 'camera' | 'image') => {
+    const nextCode = extractScanCode(decodedText);
+    if (!nextCode) return;
+    setScanCode(nextCode);
+    lastDecodedRef.current = nextCode;
+    toast.success(source === 'camera' ? `Đã quét được mã: ${nextCode}` : `Đã đọc mã từ ảnh: ${nextCode}`);
+  }, [toast]);
+
+  const handleStartCamera = async () => {
+    if (!activeRun || activeRun.status === 'closed') {
+      toast.warning('Vui lòng mở đợt kiểm kê trước khi quét camera.');
+      return;
+    }
+    try {
+      await stopCamera();
+      lastDecodedRef.current = '';
+      const scanner = new Html5Qrcode(SCANNER_ELEMENT_ID, {
+        formatsToSupport: scannerFormats,
+        useBarCodeDetectorIfSupported: true,
+        verbose: false,
+      });
+      scannerRef.current = scanner;
+      await scanner.start(
+        { facingMode: 'environment' },
+        { fps: 10, qrbox: { width: 240, height: 240 }, aspectRatio: 1.777778 },
+        decodedText => {
+          const nextCode = extractScanCode(decodedText);
+          if (!nextCode || nextCode === lastDecodedRef.current) return;
+          applyDecodedCode(nextCode, 'camera');
+          void stopCamera();
+        },
+        () => undefined
+      );
+      setIsCameraActive(true);
+    } catch {
+      scannerRef.current = null;
+      setIsCameraActive(false);
+      toast.error('Không mở được camera. Hãy kiểm tra quyền camera hoặc dùng nhập tay/quét ảnh.');
+    }
+  };
+
+  const handleImageScan = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    if (!activeRun || activeRun.status === 'closed') {
+      toast.warning('Vui lòng mở đợt kiểm kê trước khi quét ảnh.');
+      return;
+    }
+    setIsImageScanning(true);
+    let scanner: Html5Qrcode | null = null;
+    try {
+      scanner = new Html5Qrcode('inventory-qr-image-reader', {
+        formatsToSupport: scannerFormats,
+        useBarCodeDetectorIfSupported: true,
+        verbose: false,
+      });
+      const decodedText = await scanner.scanFile(file, false);
+      applyDecodedCode(decodedText, 'image');
+    } catch {
+      toast.error('Không đọc được mã trong ảnh. Hãy chụp rõ mã hơn hoặc nhập thủ công.');
+    } finally {
+      try {
+        scanner?.clear();
+      } catch {
+        // File scanner cleanup is best-effort.
+      }
+      setIsImageScanning(false);
+    }
   };
 
   const getExpectedDevicesForRun = (run: InventoryRun) => {
@@ -401,6 +519,38 @@ const InventoryQr: React.FC = () => {
           <CardHeader title="Ghi nhận mã QR" />
           <CardBody>
             <form className="inventory-scan-form" onSubmit={handleScan}>
+              <div className="inventory-scan-mode" role="tablist" aria-label="Cách nhập mã thiết bị">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  icon={<Keyboard size={16} />}
+                  className={scanMode === 'manual' ? 'is-active' : ''}
+                  onClick={() => setScanMode('manual')}
+                  aria-selected={scanMode === 'manual'}
+                >
+                  Thủ công
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  icon={<Camera size={16} />}
+                  className={scanMode === 'camera' ? 'is-active' : ''}
+                  onClick={() => setScanMode('camera')}
+                  aria-selected={scanMode === 'camera'}
+                >
+                  Camera
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  icon={<FileImage size={16} />}
+                  className={scanMode === 'image' ? 'is-active' : ''}
+                  onClick={() => setScanMode('image')}
+                  aria-selected={scanMode === 'image'}
+                >
+                  Ảnh
+                </Button>
+              </div>
               <Input
                 label="Mã QR / Serial"
                 value={scanCode}
@@ -409,6 +559,46 @@ const InventoryQr: React.FC = () => {
                 icon={<Search size={16} />}
                 disabled={!activeRun || activeRun.status === 'closed'}
               />
+              {scanMode === 'camera' && (
+                <div className="inventory-camera-panel">
+                  <div id={SCANNER_ELEMENT_ID} className="inventory-camera-reader" aria-live="polite" />
+                  <div className="inventory-camera-actions">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      icon={<Camera size={16} />}
+                      onClick={handleStartCamera}
+                      disabled={!activeRun || activeRun.status === 'closed' || isCameraActive}
+                    >
+                      {isCameraActive ? 'Đang quét' : 'Mở camera'}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      icon={<XCircle size={16} />}
+                      onClick={() => void stopCamera()}
+                      disabled={!isCameraActive}
+                    >
+                      Tắt camera
+                    </Button>
+                  </div>
+                </div>
+              )}
+              {scanMode === 'image' && (
+                <div className="inventory-image-panel">
+                  <label className="inventory-image-picker">
+                    <FileImage size={18} />
+                    <span>{isImageScanning ? 'Đang đọc ảnh...' : 'Chọn hoặc chụp ảnh mã'}</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleImageScan}
+                      disabled={!activeRun || activeRun.status === 'closed' || isImageScanning}
+                    />
+                  </label>
+                  <div id="inventory-qr-image-reader" className="inventory-image-reader" aria-hidden="true" />
+                </div>
+              )}
               <label className="inventory-field">
                 <span>Khoa/phòng thực tế</span>
                 <select
