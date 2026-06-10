@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
-const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwk_NI8tmQlxTcMLC0J6D8SN63sI7rEgj726h6GSTKqvYOTCtMhNb7gkqkkEOlZu-AU5g/exec';
+const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwLcdYjEyM_la4W7I821vKjVosT3jVZDc3g7Efrue0m7KCpXO34DE8wyJWmfI9bePGr/exec';
 const DEFAULT_USERNAME = 'pbthuong-kd';
 const DEFAULT_PIN = '1';
 
