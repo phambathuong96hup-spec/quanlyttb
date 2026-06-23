@@ -18,6 +18,17 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 PORT = int(os.getenv("DEVICES_PORT", "8997"))
+DEFAULT_CORS_ORIGINS = (
+    "http://127.0.0.1:5173,"
+    "http://localhost:5173,"
+    "http://127.0.0.1:4173,"
+    "http://localhost:4173"
+)
+
+
+def _parse_cors_origins():
+    raw_origins = os.getenv("DEVICES_CORS_ORIGINS", DEFAULT_CORS_ORIGINS)
+    return [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -34,7 +45,7 @@ app = FastAPI(title="TBMediCare-Devices API", lifespan=lifespan)
 # Allow CORS for hospital LAN browsers
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_parse_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -86,8 +97,8 @@ def api_devices_in_use(
     dept: str = Query(None),
     category: str = Query(None),
     search: str = Query(None),
-    page: int = Query(1),
-    limit: int = Query(50)
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=200)
 ):
     try:
         usages = db_manager.get_in_use_devices(
@@ -144,8 +155,8 @@ def api_history(
     search: str = Query(None),
     start_date: str = Query(None),
     end_date: str = Query(None),
-    page: int = Query(1),
-    limit: int = Query(50)
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=200)
 ):
     try:
         # Parse dates if present

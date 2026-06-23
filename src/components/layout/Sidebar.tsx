@@ -24,8 +24,8 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
   const navigate = useNavigate();
 
   const publicItems = [
-    { path: '/dashboard', name: 'Tổng quan', icon: Activity, private: false },
-    { path: '/devices', name: 'Quản lý thiết bị', icon: Microscope, private: false },
+    { path: '/dashboard', name: 'Tổng quan', icon: Activity, private: true },
+    { path: '/devices', name: 'Quản lý thiết bị', icon: Microscope, private: true },
   ];
 
   const privateItems = [
@@ -69,6 +69,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
               to={item.path}
               className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
               title={!isOpen ? item.name : undefined}
+              onClick={(e) => handlePrivateClick(e, item.path, item.private)}
             >
               <Icon size={20} className="nav-icon" />
               <span className="nav-text">{item.name}</span>

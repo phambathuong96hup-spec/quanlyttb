@@ -1,4 +1,5 @@
 import { removeVietnameseTones } from '../utils/stringUtils.ts';
+import { formatReferencesForDisplay } from './aiCitations.ts';
 
 interface LegalRagDocument {
   id: string;
@@ -242,15 +243,10 @@ const buildResponse = (query: string, references: LegalRagReference[]) => {
     reference.excerpt,
   ].join('\n'));
 
-  const sources = references
-    .map((reference) => `- ${reference.documentTitle} (${reference.fileName})`)
-    .filter((item, index, all) => all.indexOf(item) === index);
-
   return [
     'Dựa trên bộ 5 văn bản pháp quy đã nạp, các đoạn liên quan nhất là:',
     points.join('\n\n'),
-    'Nguồn tham khảo:',
-    sources.join('\n'),
+    formatReferencesForDisplay(references).trim(),
   ].join('\n\n');
 };
 

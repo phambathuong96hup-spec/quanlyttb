@@ -16,10 +16,12 @@ test('AI service uses the LightRAG upload and referenced streaming APIs', () => 
   assert.match(source, /\/documents\/upload/);
   assert.doesNotMatch(source, /\/documents\/file/);
   assert.match(source, /include_references:\s*true/);
+  assert.match(source, /include_chunk_content:\s*true/);
   assert.match(source, /queryLocalLegalRag/);
   assert.match(source, /const controller = new AbortController\(\)/);
   assert.match(source, /trimmedBuffer\.startsWith\('\{'\)/);
   assert.match(source, /handlePayload\(JSON\.parse\(trimmedBuffer\)/);
+  assert.doesNotMatch(source, /eslint-disable-next-line no-constant-condition/);
 });
 
 test('AI health check requires indexed remote documents, not only a live server', () => {

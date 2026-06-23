@@ -4,6 +4,7 @@
  */
 
 import { queryLocalLegalRag } from './legalRagService.ts';
+import { formatReferencesForDisplay, type AiCitationReference } from './aiCitations.ts';
 
 const AI_BASE_URL = (import.meta.env.VITE_AI_API_URL || '').replace(/\/+$/, '');
 const AI_API_KEY = import.meta.env.VITE_AI_API_KEY || '';
@@ -28,7 +29,7 @@ interface QueryResponse {
   references?: QueryReference[];
 }
 
-interface QueryReference {
+interface QueryReference extends AiCitationReference {
   reference_id?: string;
   file_path?: string;
   content?: string[];
@@ -72,21 +73,6 @@ export const getAIBackendInfo = () => {
     host,
     isConfigured: Boolean(AI_BASE_URL),
   };
-};
-
-const formatReferences = (references: QueryReference[]) => {
-  const sourceNames = references
-    .map((reference) => reference.file_path?.split(/[\\/]/).pop() || reference.file_path || '')
-    .filter(Boolean)
-    .filter((name, index, all) => all.indexOf(name) === index);
-
-  if (!sourceNames.length) return '';
-  return [
-    '',
-    '',
-    'Nguồn tham khảo:',
-    ...sourceNames.map((name) => `- ${name}`),
-  ].join('\n');
 };
 
 const hasNoRemoteContext = (response: string) => {
@@ -174,7 +160,7 @@ export const queryAI = async (request: QueryRequest): Promise<string> => {
         response_type: 'Multiple Paragraphs',
         top_k: 60,
         include_references: true,
-        include_chunk_content: false,
+        include_chunk_content: true,
         conversation_history: request.conversation_history || [],
       }),
     });
@@ -189,7 +175,7 @@ export const queryAI = async (request: QueryRequest): Promise<string> => {
       const answer = await queryLocalLegalRag(request.query);
       return answer.response;
     }
-    return `${data.response}${formatReferences(data.references || [])}`;
+    return `${data.response}${formatReferencesForDisplay(data.references || [])}`;
   } catch {
     const answer = await queryLocalLegalRag(request.query);
     return answer.response;
@@ -226,7 +212,7 @@ export const queryAIStream = async (
         response_type: 'Multiple Paragraphs',
         top_k: 60,
         include_references: true,
-        include_chunk_content: false,
+        include_chunk_content: true,
         conversation_history: request.conversation_history || [],
       }),
     });
@@ -273,10 +259,13 @@ export const queryAIStream = async (
       }
     };
 
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
+    let isReading = true;
+    while (isReading) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        isReading = false;
+        continue;
+      }
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split(/\r?\n/);
       buffer = lines.pop() || '';
@@ -297,7 +286,7 @@ export const queryAIStream = async (
       await queryLocalFallback(request.query, onChunk, onDone);
       return;
     }
-    const sources = formatReferences(references);
+    const sources = formatReferencesForDisplay(references);
     if (sources) onChunk(sources);
     onDone();
   } catch (err) {

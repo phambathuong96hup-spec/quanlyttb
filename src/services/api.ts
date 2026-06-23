@@ -2,6 +2,7 @@ import { getAuthPayload } from '../authSession';
 
 import { parseVietnameseDate } from '../utils/dateUtils';
 import devicesSnapshot from '../data/devices.snapshot.json';
+import { unwrapAppsScriptReadResponse } from './apiEnvelope';
 
 // WARNING: Hardcoding the GAS URL/key here is a security risk. In production, always use env variables.
 const DEFAULT_GOOGLE_SHEETS_API_URL = 'https://script.google.com/macros/s/AKfycbzHzDXD7Ai6a4rgaNxM0baVnLZPp9kqt3FJS_ljI1NgPuN5_KdJgBW9nbEre7rNp7QOxw/exec';
@@ -149,7 +150,7 @@ const postReadAction = async (action: string) => safeFetch(GOOGLE_SHEETS_API_URL
   // Note: text/plain is used as a workaround to avoid CORS preflight options requests with Google Apps Script
   headers: { 'Content-Type': 'text/plain;charset=utf-8' },
   body: JSON.stringify({ action, payload: getAuthPayload() }),
-});
+}).then(unwrapAppsScriptReadResponse);
 
 const parseDocuments = (rawDocs: unknown[]): DeviceDocument[] => {
   if (!Array.isArray(rawDocs)) return [];

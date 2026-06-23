@@ -22,8 +22,22 @@ DATABASE_URL = os.getenv(
     "postgresql://postgres:postgres@127.0.0.1:5432/tbmedicare_devices",
 )
 SCHEMA_PATH = os.path.join(os.path.dirname(__file__), "schema.sql")
+DEFAULT_PAGE = 1
+DEFAULT_PAGE_LIMIT = 50
+MAX_PAGE_LIMIT = 200
 
 _pool = None
+
+def _safe_int(value, fallback):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
+
+def _normalize_pagination(page, limit):
+    safe_page = max(_safe_int(page, DEFAULT_PAGE), 1)
+    safe_limit = min(max(_safe_int(limit, DEFAULT_PAGE_LIMIT), 1), MAX_PAGE_LIMIT)
+    return safe_page, safe_limit
 
 def _get_pool():
     global _pool
@@ -323,7 +337,7 @@ def get_dashboard_stats(dept_code=None):
             
             # 5. Stats by category
             q5 = """
-                SELECT c.code, c.name, COUNT(DISTINCT u.id) as count 
+                SELECT c.code, c.name, COUNT(DISTINCT u.machine_id) as count
                 FROM device_usages u 
                 JOIN machines m ON m.id = u.machine_id 
                 JOIN machine_categories c ON c.id = m.category_id 
@@ -346,48 +360,7 @@ def get_dashboard_stats(dept_code=None):
                 "categories": categories_stats
             }
 
-def get_department_device_dashboard(dept_code=None, category_code=None):
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            query = """
-                SELECT
-                    m.id,
-                    m.machine_code,
-                    m.machine_name,
-                    m.room_code,
-                    m.status as machine_status,
-                    m.is_active,
-                    c.name as category_name,
-                    c.code as category_code,
-                    md.code as machine_department_code,
-                    md.name as machine_department_name,
-                    u.status as usage_status,
-                    u.started_at,
-                    u.department_code as usage_department_code,
-                    ud.name as usage_department_name,
-                    e.his_treatment_code,
-                    p.full_name as patient_name
-                FROM machines m
-                JOIN machine_categories c ON c.id = m.category_id
-                LEFT JOIN departments md ON md.id = m.department_id
-                LEFT JOIN device_usages u ON u.machine_id = m.id AND u.status = 'in_use'
-                LEFT JOIN encounters e ON e.id = u.encounter_id
-                LEFT JOIN patients p ON p.id = e.patient_id
-                LEFT JOIN departments ud ON ud.code = u.department_code
-                WHERE m.is_active = TRUE
-            """
-            params = []
-            if dept_code:
-                query += " AND (u.department_code = %s OR (u.department_code IS NULL AND md.code = %s))"
-                params.extend([dept_code, dept_code])
-            if category_code:
-                query += " AND c.code = %s"
-                params.append(category_code)
-
-            query += " ORDER BY COALESCE(ud.name, md.name, 'Chưa gán khoa'), m.room_code NULLS LAST, m.machine_name"
-            cur.execute(query, tuple(params))
-            rows = cur.fetchall()
-
+def _build_department_device_dashboard(rows):
     departments = {}
     summary = {
         "departments": 0,
@@ -396,8 +369,14 @@ def get_department_device_dashboard(dept_code=None, category_code=None):
         "available": 0,
         "maintenance": 0,
     }
+    seen_machine_ids = set()
 
     for row in rows:
+        machine_id = row.get("id") or row.get("machine_code")
+        if machine_id in seen_machine_ids:
+            continue
+        seen_machine_ids.add(machine_id)
+
         status = "in_use" if row.get("usage_status") == "in_use" else row.get("machine_status", "available")
         dept_code_key = row.get("usage_department_code") or row.get("machine_department_code") or "UNASSIGNED"
         dept_name = row.get("usage_department_name") or row.get("machine_department_name") or "Chưa gán khoa"
@@ -462,7 +441,63 @@ def get_department_device_dashboard(dept_code=None, category_code=None):
         "departments": payload_departments,
     }
 
+def get_department_device_dashboard(dept_code=None, category_code=None):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            query = """
+                SELECT
+                    m.id,
+                    m.machine_code,
+                    m.machine_name,
+                    m.room_code,
+                    m.status as machine_status,
+                    m.is_active,
+                    c.name as category_name,
+                    c.code as category_code,
+                    md.code as machine_department_code,
+                    md.name as machine_department_name,
+                    u.status as usage_status,
+                    u.started_at,
+                    u.department_code as usage_department_code,
+                    ud.name as usage_department_name,
+                    u.his_treatment_code,
+                    u.patient_name
+                FROM machines m
+                JOIN machine_categories c ON c.id = m.category_id
+                LEFT JOIN departments md ON md.id = m.department_id
+                LEFT JOIN LATERAL (
+                    SELECT
+                        du.status,
+                        du.started_at,
+                        du.department_code,
+                        e.his_treatment_code,
+                        p.full_name as patient_name
+                    FROM device_usages du
+                    JOIN encounters e ON e.id = du.encounter_id
+                    JOIN patients p ON p.id = e.patient_id
+                    WHERE du.machine_id = m.id AND du.status = 'in_use'
+                    ORDER BY du.started_at DESC, du.updated_at DESC
+                    LIMIT 1
+                ) u ON TRUE
+                LEFT JOIN departments ud ON ud.code = u.department_code
+                WHERE m.is_active = TRUE
+            """
+            params = []
+            if dept_code:
+                query += " AND (u.department_code = %s OR (u.department_code IS NULL AND md.code = %s))"
+                params.extend([dept_code, dept_code])
+            if category_code:
+                query += " AND c.code = %s"
+                params.append(category_code)
+
+            query += " ORDER BY COALESCE(ud.name, md.name, 'Chưa gán khoa'), m.room_code NULLS LAST, m.machine_name"
+            cur.execute(query, tuple(params))
+            rows = cur.fetchall()
+
+    return _build_department_device_dashboard(rows)
+
 def get_in_use_devices(dept_code=None, category_code=None, search=None, page=1, limit=50):
+    page, limit = _normalize_pagination(page, limit)
     offset = (page - 1) * limit
     with get_connection() as conn:
         with conn.cursor() as cur:
@@ -634,6 +669,7 @@ def get_patients_with_devices(dept_code=None, category_code=None, search=None):
             return cur.fetchall()
 
 def get_history(dept_code=None, category_code=None, search=None, start_date=None, end_date=None, page=1, limit=50):
+    page, limit = _normalize_pagination(page, limit)
     offset = (page - 1) * limit
     with get_connection() as conn:
         with conn.cursor() as cur:
