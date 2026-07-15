@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Plus, Download, Printer, Search, Eye, Edit2, Save, Loader2, CheckCircle, AlertTriangle, Monitor, X, Wrench, ShieldAlert, CalendarX2 } from 'lucide-react';
 import { Card, Button, Input, Table, TableHead, TableBody, TableRow, TableHeader, TableCell, Modal, useToast } from '../components/ui';
 import { addDevice, editDevice, type DeviceData } from '../services/api';
@@ -8,6 +8,10 @@ import { exportCsv } from '../utils/exportCsv';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { QRCodeSVG } from 'qrcode.react';
 import { matchSmartSearch } from '../utils/stringUtils';
+import {
+  buildDepartmentQrPrintOptions,
+  selectDevicesForDepartmentQrPrint,
+} from '../utils/departmentQrPrint';
 import {
   getDeviceStatusFlags,
   isRecentDevice,
@@ -49,6 +53,8 @@ const DeviceList: React.FC = () => {
   const itemsPerPage = 50;
 
   const [printingDevices, setPrintingDevices] = useState<DeviceData[]>([]);
+  const [showDepartmentPrintModal, setShowDepartmentPrintModal] = useState(false);
+  const [printDepartment, setPrintDepartment] = useState('');
 
   // Modal state
   const [showModal, setShowModal] = useState(false);
@@ -72,15 +78,28 @@ const DeviceList: React.FC = () => {
   }, [searchTerm, departmentFilter, statusFilter, recentOnly]);
 
   useEffect(() => {
-    if (printingDevices.length > 0) {
-      setTimeout(() => {
-        window.print();
-        setPrintingDevices([]);
-      }, 500);
-    }
+    if (printingDevices.length === 0) return undefined;
+
+    const printTimer = window.setTimeout(() => {
+      window.print();
+      setPrintingDevices([]);
+    }, 500);
+
+    return () => window.clearTimeout(printTimer);
   }, [printingDevices]);
 
-  const uniqueDepartments = Array.from(new Set(devices.map(d => d.department))).filter(Boolean).sort();
+  const departmentPrintOptions = useMemo(
+    () => buildDepartmentQrPrintOptions(devices),
+    [devices],
+  );
+  const uniqueDepartments = useMemo(
+    () => departmentPrintOptions.map(option => option.department),
+    [departmentPrintOptions],
+  );
+  const selectedDepartmentDevices = useMemo(
+    () => selectDevicesForDepartmentQrPrint(devices, printDepartment),
+    [devices, printDepartment],
+  );
   const statusCounts = devices.reduce<Record<DeviceStatusFilter, number>>((acc, device) => {
     const flags = getDeviceStatusFlags(device);
     acc.all += 1;
@@ -108,7 +127,7 @@ const DeviceList: React.FC = () => {
   const filteredDevices = devices.filter(device => {
     // Smart search (multi-keyword, diacritics-insensitive matching id, name, department, notes)
     const searchMatch = matchSmartSearch(device, ['id', 'name', 'department', 'Ghi chú'], searchTerm);
-    const deptMatch = departmentFilter === 'all' || device.department === departmentFilter;
+    const deptMatch = departmentFilter === 'all' || String(device.department || '').trim() === departmentFilter;
     const statusMatch = matchesDeviceStatusFilter(device, statusFilter);
     const recentMatch = !recentOnly || isRecentDevice(device);
 
@@ -119,9 +138,24 @@ const DeviceList: React.FC = () => {
   const paginatedDevices = filteredDevices.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
   const handlePrintSingleQR = (device: DeviceData) => setPrintingDevices([device]);
-  const handlePrintBulkQR = () => {
-    if (filteredDevices.length > 0) setPrintingDevices(filteredDevices.slice(0, 20));
-    else toast.warning('Không có thiết bị nào trong danh sách hiển thị để in.');
+  const closeDepartmentPrintModal = () => {
+    setShowDepartmentPrintModal(false);
+  };
+  const handleOpenDepartmentPrint = () => {
+    const filteredDepartment = departmentFilter !== 'all' && uniqueDepartments.includes(departmentFilter)
+      ? departmentFilter
+      : '';
+    setPrintDepartment(filteredDepartment);
+    setShowDepartmentPrintModal(true);
+  };
+  const handlePrintDepartmentQr = () => {
+    if (selectedDepartmentDevices.length === 0) {
+      toast.warning('Vui lòng chọn khoa/phòng có thiết bị để in QR.');
+      return;
+    }
+
+    closeDepartmentPrintModal();
+    setPrintingDevices(selectedDepartmentDevices);
   };
 
   const handleExportCsv = () => {
@@ -193,7 +227,14 @@ const DeviceList: React.FC = () => {
         <h1 className="page-title">Danh sách trang thiết bị</h1>
         <div className="action-buttons">
           <Button variant="secondary" icon={<Download size={18} />} onClick={handleExportCsv}>Xuất CSV</Button>
-          <Button variant="secondary" icon={<Printer size={18} />} onClick={handlePrintBulkQR}>In QR hàng loạt</Button>
+          <Button
+            id="department-print-trigger"
+            variant="secondary"
+            icon={<Printer size={18} />}
+            onClick={handleOpenDepartmentPrint}
+          >
+            In QR theo khoa/phòng
+          </Button>
           {isAdmin && <Button variant="primary" icon={<Plus size={18} />} onClick={openAddModal}>Thêm thiết bị mới</Button>}
         </div>
       </div>
@@ -251,11 +292,11 @@ const DeviceList: React.FC = () => {
       <Card>
         <div className="toolbar" style={{ padding: '20px', paddingBottom: '12px' }}>
           <div className="filter-group">
-            <select className="filter-select" value={departmentFilter} onChange={e => setDepartmentFilter(e.target.value)}>
+            <select aria-label="Lọc theo khoa/phòng" className="filter-select" value={departmentFilter} onChange={e => setDepartmentFilter(e.target.value)}>
               <option value="all">Tất cả khoa/phòng</option>
               {uniqueDepartments.map(dept => <option key={dept} value={dept}>{dept}</option>)}
             </select>
-            <select className="filter-select" value={statusFilter} onChange={e => setStatusFilter(e.target.value as DeviceStatusFilter)}>
+            <select aria-label="Lọc theo trạng thái" className="filter-select" value={statusFilter} onChange={e => setStatusFilter(e.target.value as DeviceStatusFilter)}>
               <option value="all">Tất cả trạng thái</option>
               <option value="good">Hoạt động tốt</option>
               <option value="reported">Báo hỏng</option>
@@ -291,6 +332,7 @@ const DeviceList: React.FC = () => {
                     padding: '4px'
                   }}
                   title="Xóa tìm kiếm"
+                  aria-label="Xóa tìm kiếm"
                 >
                   <X size={16} />
                 </button>
@@ -424,9 +466,9 @@ const DeviceList: React.FC = () => {
                   </TableCell>
                   <TableCell className="col-device-actions">
                     <div className="action-buttons-cell">
-                      <Button variant="secondary" size="sm" icon={<Eye size={16} />} title="Xem chi tiết" onClick={() => navigate(`/devices/${encodeURIComponent(device.id)}`)} className="btn-icon-only" />
-                      {isAdmin && <Button variant="secondary" size="sm" icon={<Edit2 size={16} />} title="Sửa" onClick={() => openEditModal(device)} className="btn-icon-only" />}
-                      <Button variant="secondary" size="sm" icon={<Printer size={16} />} title="In QR" onClick={() => handlePrintSingleQR(device)} className="btn-icon-only" />
+                      <Button variant="secondary" size="sm" icon={<Eye size={16} />} title="Xem chi tiết" aria-label={`Xem chi tiết ${device.name}`} onClick={() => navigate(`/devices/${encodeURIComponent(device.id)}`)} className="btn-icon-only" />
+                      {isAdmin && <Button variant="secondary" size="sm" icon={<Edit2 size={16} />} title="Sửa" aria-label={`Sửa ${device.name}`} onClick={() => openEditModal(device)} className="btn-icon-only" />}
+                      <Button variant="secondary" size="sm" icon={<Printer size={16} />} title="In QR" aria-label={`In QR ${device.name}`} onClick={() => handlePrintSingleQR(device)} className="btn-icon-only" />
                     </div>
                   </TableCell>
                 </TableRow>
@@ -473,6 +515,66 @@ const DeviceList: React.FC = () => {
           })}
         </div>
       )}
+
+      <Modal
+        isOpen={showDepartmentPrintModal}
+        onClose={closeDepartmentPrintModal}
+        title="In QR theo khoa/phòng"
+        size="sm"
+      >
+        <div className="department-print-dialog">
+          <div className="department-print-field">
+            <label htmlFor="qr-print-department">Khoa/phòng cần in</label>
+            <select
+              id="qr-print-department"
+              className="filter-select department-print-select"
+              value={printDepartment}
+              onChange={event => setPrintDepartment(event.target.value)}
+              aria-describedby="qr-print-department-help"
+            >
+              <option value="">
+                {departmentPrintOptions.length > 0 ? 'Chọn khoa/phòng' : 'Chưa có khoa/phòng để in'}
+              </option>
+              {departmentPrintOptions.map(option => (
+                <option key={option.department} value={option.department}>
+                  {option.department} ({option.count} thiết bị)
+                </option>
+              ))}
+            </select>
+            <p id="qr-print-department-help">
+              Bản in gồm toàn bộ thiết bị thuộc khoa/phòng đã chọn, không phụ thuộc bộ lọc đang hiển thị.
+            </p>
+          </div>
+
+          <div className={`department-print-manifest ${printDepartment ? 'is-ready' : ''}`} aria-live="polite">
+            <div className="department-print-manifest-icon" aria-hidden="true">
+              <Printer size={22} />
+            </div>
+            <div className="department-print-manifest-copy">
+              <span>Phiếu in khoa/phòng</span>
+              <strong>{printDepartment || 'Chưa chọn khoa/phòng'}</strong>
+              <small>{printDepartment ? 'Sẵn sàng tạo mã QR theo danh sách quản lý.' : 'Chọn khoa/phòng để kiểm tra số lượng.'}</small>
+            </div>
+            <div className="department-print-manifest-count">
+              <strong>{selectedDepartmentDevices.length}</strong>
+              <span>mã QR</span>
+            </div>
+          </div>
+
+          <div className="department-print-actions">
+            <Button type="button" variant="secondary" onClick={closeDepartmentPrintModal}>Hủy</Button>
+            <Button
+              type="button"
+              variant="primary"
+              icon={<Printer size={17} />}
+              disabled={selectedDepartmentDevices.length === 0}
+              onClick={handlePrintDepartmentQr}
+            >
+              In {selectedDepartmentDevices.length} mã QR
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       {/* Modal Thêm / Sửa thiết bị */}
       <Modal

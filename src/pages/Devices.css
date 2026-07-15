@@ -515,6 +515,118 @@
   word-break: break-word;
 }
 
+.department-print-dialog {
+  display: grid;
+  gap: 18px;
+}
+
+.department-print-field label {
+  display: block;
+  margin-bottom: 7px;
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  font-weight: 750;
+}
+
+.department-print-select {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+}
+
+.department-print-field p {
+  margin: 7px 0 0;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.department-print-manifest {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 15px;
+  border: 1px solid var(--border);
+  border-left: 4px solid #94a3b8;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.department-print-manifest.is-ready {
+  border-left-color: var(--primary);
+  background: #f2fbf8;
+}
+
+.department-print-manifest-icon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border: 1px solid #d8e2e8;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #64748b;
+}
+
+.department-print-manifest.is-ready .department-print-manifest-icon {
+  border-color: #b8ddd7;
+  color: var(--primary);
+}
+
+.department-print-manifest-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.department-print-manifest-copy span,
+.department-print-manifest-count span {
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.department-print-manifest-copy strong {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 0.92rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.department-print-manifest-copy small {
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
+.department-print-manifest-count {
+  display: grid;
+  justify-items: end;
+  min-width: 62px;
+  font-variant-numeric: tabular-nums;
+}
+
+.department-print-manifest-count strong {
+  color: var(--text-primary);
+  font-size: 1.6rem;
+  font-weight: 850;
+  line-height: 1;
+}
+
+.department-print-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+#print-area {
+  display: none;
+}
+
 @media (max-width: 768px) {
   .info-grid {
     grid-template-columns: repeat(2, 1fr);
@@ -524,6 +636,34 @@
 @media (max-width: 480px) {
   .info-grid {
     grid-template-columns: 1fr;
+  }
+
+  .department-print-manifest {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .department-print-manifest-count {
+    grid-column: 2;
+    grid-auto-flow: column;
+    align-items: baseline;
+    justify-content: start;
+    justify-items: start;
+    gap: 6px;
+  }
+
+  .department-print-manifest-copy strong {
+    overflow: visible;
+    overflow-wrap: anywhere;
+    text-overflow: clip;
+    white-space: normal;
+  }
+
+  .department-print-actions {
+    flex-wrap: wrap;
+  }
+
+  .department-print-actions .btn {
+    flex: 1 1 140px;
   }
 }
 
