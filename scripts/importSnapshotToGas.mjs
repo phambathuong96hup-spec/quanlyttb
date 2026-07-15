@@ -2,12 +2,10 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbzHzDXD7Ai6a4rgaNxM0baVnLZPp9kqt3FJS_ljI1NgPuN5_KdJgBW9nbEre7rNp7QOxw/exec';
-const DEFAULT_USERNAME = 'pbthuong-kd';
-const DEFAULT_PIN = '1';
 
 const endpoint = process.argv[2] || process.env.VITE_THIET_BI_API_URL || DEFAULT_ENDPOINT;
-const username = process.argv[3] || process.env.QLTTB_IMPORT_USERNAME || DEFAULT_USERNAME;
-const pin = process.argv[4] || process.env.QLTTB_IMPORT_PIN || DEFAULT_PIN;
+const username = process.argv[3] || process.env.QLTTB_IMPORT_USERNAME || '';
+const pin = process.argv[4] || process.env.QLTTB_IMPORT_PIN || '';
 const dryRun = process.argv.includes('--dry-run');
 
 const postAction = async (action, payload) => {
@@ -32,6 +30,13 @@ if (dryRun) {
   const documents = devices.reduce((total, device) => total + (device.documents?.length || 0), 0);
   console.log(`Dry run only: ${devices.length} devices and ${documents} documents are ready to import.`);
   process.exit(0);
+}
+
+if (!username || !pin) {
+  throw new Error(
+    'Missing import credentials. Set QLTTB_IMPORT_USERNAME and QLTTB_IMPORT_PIN, '
+    + 'or pass endpoint, username, and PIN as command arguments.',
+  );
 }
 
 const login = await postAction('login', { username, pin });

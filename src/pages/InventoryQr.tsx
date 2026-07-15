@@ -5,7 +5,14 @@ import { Badge, Button, Card, CardBody, CardHeader, Input, Table, TableBody, Tab
 import { useDevices } from '../hooks/useDevices';
 import { useAuth } from '../authContext';
 import { exportCsv } from '../utils/exportCsv';
-import { deleteInventoryRun, saveInventoryRun, type DeviceData, type InventoryRunSavePayload } from '../services/api';
+import {
+  deleteInventoryRun,
+  fetchInventoryRuns,
+  saveInventoryRun,
+  type DeviceData,
+  type InventoryRunSavePayload,
+  type InventoryRunSummary,
+} from '../services/api';
 import './InventoryQr.css';
 
 const STORAGE_KEY = 'qlttb.inventory_runs';
@@ -35,6 +42,12 @@ interface InventoryRun {
   sheetName?: string;
   syncStatus?: 'synced' | 'pending';
   lastSyncedAt?: string;
+  expectedCount?: number;
+  scannedCount?: number;
+  missingCount?: number;
+  wrongDepartmentCount?: number;
+  updatedAt?: string;
+  isServerSummaryOnly?: boolean;
   scans: InventoryScan[];
 }
 
@@ -71,6 +84,48 @@ const readRuns = (): InventoryRun[] => {
 
 const writeRuns = (runs: InventoryRun[]) => {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(runs));
+};
+
+const toInventoryStatus = (status: string): InventoryStatus => (
+  status.toLowerCase() === 'closed' ? 'closed' : 'active'
+);
+
+const mergeInventoryRunHistory = (
+  localRuns: InventoryRun[],
+  serverRuns: InventoryRunSummary[]
+): InventoryRun[] => {
+  const localById = new Map(localRuns.map(run => [run.runId, run]));
+  const serverIds = new Set(serverRuns.map(run => run.runId));
+  const mergedServerRuns = serverRuns.map(summary => {
+    const local = localById.get(summary.runId);
+    if (local?.syncStatus === 'pending') return local;
+    return {
+      ...(local || {}),
+      runId: summary.runId,
+      name: summary.name,
+      department: summary.department,
+      createdAt: summary.createdAt,
+      createdBy: summary.createdBy,
+      status: toInventoryStatus(summary.status),
+      sheetName: summary.sheetName,
+      syncStatus: 'synced' as const,
+      lastSyncedAt: summary.updatedAt,
+      expectedCount: summary.totalDevices,
+      scannedCount: summary.scannedCount,
+      missingCount: summary.missingCount,
+      wrongDepartmentCount: summary.wrongDepartmentCount,
+      updatedAt: summary.updatedAt,
+      isServerSummaryOnly: !local,
+      scans: local?.scans || [],
+    };
+  });
+  return [
+    ...mergedServerRuns,
+    ...localRuns.filter(run => !serverIds.has(run.runId)),
+  ].sort((first, second) => (
+    new Date(second.updatedAt || second.createdAt).getTime()
+    - new Date(first.updatedAt || first.createdAt).getTime()
+  ));
 };
 
 const cleanText = (value: unknown, fallback = '') => String(value || fallback).trim();
@@ -132,6 +187,8 @@ const InventoryQr: React.FC = () => {
   const [scanMode, setScanMode] = useState<ScanInputMode>('manual');
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [isImageScanning, setIsImageScanning] = useState(false);
+  const [historyStatus, setHistoryStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [historyError, setHistoryError] = useState('');
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const lastDecodedRef = useRef('');
 
@@ -170,10 +227,48 @@ const InventoryQr: React.FC = () => {
     ? Math.round(((activeRun?.scans.length || 0) / expectedDevices.length) * 100)
     : 0;
 
+  const expectedDeviceCount = activeRun?.isServerSummaryOnly
+    ? activeRun.expectedCount || 0
+    : expectedDevices.length;
+  const scannedDeviceCount = activeRun?.isServerSummaryOnly
+    ? activeRun.scannedCount || 0
+    : activeRun?.scans.length || 0;
+  const missingDeviceCount = activeRun?.isServerSummaryOnly
+    ? activeRun.missingCount || 0
+    : missingDevices.length;
+  const wrongDepartmentCount = activeRun?.isServerSummaryOnly
+    ? activeRun.wrongDepartmentCount || 0
+    : wrongLocationScans.length;
+  const displayedCompletionRate = activeRun?.isServerSummaryOnly
+    ? (expectedDeviceCount > 0 ? Math.round((scannedDeviceCount / expectedDeviceCount) * 100) : 0)
+    : completionRate;
+
   const persistRuns = (nextRuns: InventoryRun[]) => {
     setRuns(nextRuns);
     writeRuns(nextRuns);
   };
+
+  const loadInventoryHistory = useCallback(async () => {
+    setHistoryStatus('loading');
+    setHistoryError('');
+    try {
+      const serverRuns = await fetchInventoryRuns();
+      const merged = mergeInventoryRunHistory(readRuns(), serverRuns);
+      setRuns(merged);
+      writeRuns(merged);
+      setSelectedRunId(currentId => (
+        merged.some(run => run.runId === currentId) ? currentId : merged[0]?.runId || ''
+      ));
+      setHistoryStatus('ready');
+    } catch (error) {
+      setHistoryStatus('error');
+      setHistoryError(error instanceof Error ? error.message : 'Không tải được lịch sử kiểm kê.');
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadInventoryHistory();
+  }, [loadInventoryHistory]);
 
   const stopCamera = useCallback(async () => {
     const scanner = scannerRef.current;
@@ -210,7 +305,7 @@ const InventoryQr: React.FC = () => {
   }, [toast]);
 
   const handleStartCamera = async () => {
-    if (!activeRun || activeRun.status === 'closed') {
+    if (!activeRun || activeRun.status === 'closed' || activeRun.isServerSummaryOnly) {
       toast.warning('Vui lòng mở đợt kiểm kê trước khi quét camera.');
       return;
     }
@@ -246,7 +341,7 @@ const InventoryQr: React.FC = () => {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
-    if (!activeRun || activeRun.status === 'closed') {
+    if (!activeRun || activeRun.status === 'closed' || activeRun.isServerSummaryOnly) {
       toast.warning('Vui lòng mở đợt kiểm kê trước khi quét ảnh.');
       return;
     }
@@ -358,6 +453,10 @@ const InventoryQr: React.FC = () => {
       toast.warning('Vui lòng tạo đợt kiểm kê trước.');
       return;
     }
+    if (activeRun.isServerSummaryOnly) {
+      toast.warning('Lịch sử từ máy chủ chỉ có số liệu tổng hợp và không thể tiếp tục quét.');
+      return;
+    }
     const device = matchDeviceByCode(devices, scanCode);
     if (!device) {
       toast.error('Không tìm thấy thiết bị từ mã QR/Serial vừa nhập.');
@@ -393,7 +492,7 @@ const InventoryQr: React.FC = () => {
   };
 
   const handleCloseRun = async () => {
-    if (!activeRun) return;
+    if (!activeRun || activeRun.isServerSummaryOnly) return;
     const nextRuns: InventoryRun[] = runs.map(run => (
       run.runId === activeRun.runId ? { ...run, status: 'closed' as const } : run
     ));
@@ -496,11 +595,21 @@ const InventoryQr: React.FC = () => {
               Đồng bộ lại
             </Button>
           )}
-          <Button variant="secondary" icon={<Download size={16} />} onClick={handleExport} disabled={!activeRun}>
+          {historyStatus === 'loading' && <Badge variant="neutral">Đang tải lịch sử...</Badge>}
+          {historyStatus === 'error' && (
+            <>
+              <Badge variant="danger">Không tải được lịch sử</Badge>
+              <Button variant="secondary" icon={<RefreshCw size={16} />} onClick={() => void loadInventoryHistory()}>
+                Thử lại
+              </Button>
+            </>
+          )}
+          <Button variant="secondary" icon={<Download size={16} />} onClick={handleExport} disabled={!activeRun || activeRun.isServerSummaryOnly}>
             CSV
           </Button>
         </div>
       </div>
+      {historyError && <div className="inventory-sync-note" role="alert">Không tải được lịch sử: {historyError}</div>}
 
       <section className="inventory-grid">
         <Card className="inventory-panel">
@@ -534,7 +643,7 @@ const InventoryQr: React.FC = () => {
                   {runs.length === 0 && <option value="">Chưa có đợt kiểm kê</option>}
                   {runs.map(run => (
                     <option key={run.runId} value={run.runId}>
-                      {run.name} - {run.department === 'all' ? 'Toàn trung tâm' : run.department}
+                      {run.name} - {run.department === 'all' ? 'Toàn trung tâm' : run.department}{run.isServerSummaryOnly ? ' · Lịch sử máy chủ' : ''}
                     </option>
                   ))}
                 </select>
@@ -551,6 +660,11 @@ const InventoryQr: React.FC = () => {
               {activeRun?.sheetName && (
                 <small className="inventory-sync-note">
                   Đang lưu tại Google Sheets: {activeRun.sheetName}
+                </small>
+              )}
+              {activeRun?.isServerSummaryOnly && (
+                <small className="inventory-sync-note">
+                  Lịch sử này được tải từ máy chủ ở chế độ chỉ xem; dữ liệu chi tiết từng lượt quét không có trong API tổng hợp.
                 </small>
               )}
             </label>
@@ -599,7 +713,7 @@ const InventoryQr: React.FC = () => {
                 onChange={event => setScanCode(event.target.value)}
                 placeholder="Quét hoặc nhập mã thiết bị"
                 icon={<Search size={16} />}
-                disabled={!activeRun || activeRun.status === 'closed'}
+                disabled={!activeRun || activeRun.status === 'closed' || activeRun.isServerSummaryOnly}
               />
               {scanMode === 'camera' && (
                 <div className="inventory-camera-panel">
@@ -610,7 +724,7 @@ const InventoryQr: React.FC = () => {
                       variant="secondary"
                       icon={<Camera size={16} />}
                       onClick={handleStartCamera}
-                      disabled={!activeRun || activeRun.status === 'closed' || isCameraActive}
+                      disabled={!activeRun || activeRun.status === 'closed' || activeRun.isServerSummaryOnly || isCameraActive}
                     >
                       {isCameraActive ? 'Đang quét' : 'Mở camera'}
                     </Button>
@@ -635,7 +749,7 @@ const InventoryQr: React.FC = () => {
                       type="file"
                       accept="image/*"
                       onChange={handleImageScan}
-                      disabled={!activeRun || activeRun.status === 'closed' || isImageScanning}
+                      disabled={!activeRun || activeRun.status === 'closed' || activeRun.isServerSummaryOnly || isImageScanning}
                     />
                   </label>
                   <div id="inventory-qr-image-reader" className="inventory-image-reader" aria-hidden="true" />
@@ -646,7 +760,7 @@ const InventoryQr: React.FC = () => {
                 <select
                   value={actualDepartment}
                   onChange={event => setActualDepartment(event.target.value)}
-                  disabled={!activeRun || activeRun.status === 'closed'}
+                  disabled={!activeRun || activeRun.status === 'closed' || activeRun.isServerSummaryOnly}
                 >
                   <option value="">Theo đợt kiểm kê</option>
                   {departments.map(department => (
@@ -659,7 +773,7 @@ const InventoryQr: React.FC = () => {
                 <select
                   value={condition}
                   onChange={event => setCondition(event.target.value as InventoryCondition)}
-                  disabled={!activeRun || activeRun.status === 'closed'}
+                  disabled={!activeRun || activeRun.status === 'closed' || activeRun.isServerSummaryOnly}
                 >
                   <option value="ok">Đúng vị trí</option>
                   <option value="damaged">Hư hỏng</option>
@@ -671,13 +785,13 @@ const InventoryQr: React.FC = () => {
                 value={note}
                 onChange={event => setNote(event.target.value)}
                 placeholder="Ghi chú hiện trạng nếu cần"
-                disabled={!activeRun || activeRun.status === 'closed'}
+                disabled={!activeRun || activeRun.status === 'closed' || activeRun.isServerSummaryOnly}
               />
               <div className="inventory-scan-actions">
-                <Button type="submit" variant="primary" icon={<PackageCheck size={16} />} disabled={!activeRun || activeRun.status === 'closed' || isSyncing}>
+                <Button type="submit" variant="primary" icon={<PackageCheck size={16} />} disabled={!activeRun || activeRun.status === 'closed' || activeRun.isServerSummaryOnly || isSyncing}>
                   {isSyncing ? 'Đang lưu...' : 'Ghi nhận mã QR'}
                 </Button>
-                <Button type="button" variant="secondary" icon={<ClipboardCheck size={16} />} onClick={handleCloseRun} disabled={!activeRun || activeRun.status === 'closed' || isSyncing}>
+                <Button type="button" variant="secondary" icon={<ClipboardCheck size={16} />} onClick={handleCloseRun} disabled={!activeRun || activeRun.status === 'closed' || activeRun.isServerSummaryOnly || isSyncing}>
                   Khóa đợt
                 </Button>
               </div>
@@ -688,23 +802,23 @@ const InventoryQr: React.FC = () => {
 
       <section className="inventory-summary-grid" aria-label="Tổng hợp kiểm kê">
         <div className="inventory-summary-item">
-          <strong>{expectedDevices.length}</strong>
+          <strong>{expectedDeviceCount}</strong>
           <span>Thiết bị cần kiểm kê</span>
         </div>
         <div className="inventory-summary-item is-success">
-          <strong>{activeRun?.scans.length || 0}</strong>
+          <strong>{scannedDeviceCount}</strong>
           <span>Đã quét</span>
         </div>
         <div className="inventory-summary-item is-warning">
-          <strong>{missingDevices.length}</strong>
+          <strong>{missingDeviceCount}</strong>
           <span>Thiết bị chưa quét</span>
         </div>
         <div className="inventory-summary-item is-danger">
-          <strong>{wrongLocationScans.length}</strong>
+          <strong>{wrongDepartmentCount}</strong>
           <span>Sai khoa/phòng</span>
         </div>
         <div className="inventory-summary-item">
-          <strong>{completionRate}%</strong>
+          <strong>{displayedCompletionRate}%</strong>
           <span>Tỷ lệ hoàn thành</span>
         </div>
       </section>
@@ -726,6 +840,8 @@ const InventoryQr: React.FC = () => {
               <TableBody>
                 {isLoading ? (
                   <TableRow><TableCell colSpan={5} className="inventory-empty">Đang tải dữ liệu thiết bị...</TableCell></TableRow>
+                ) : activeRun?.isServerSummaryOnly ? (
+                  <TableRow><TableCell colSpan={5} className="inventory-empty">Lịch sử máy chủ hiện chỉ cung cấp số liệu tổng hợp.</TableCell></TableRow>
                 ) : !activeRun || activeRun.scans.length === 0 ? (
                   <TableRow><TableCell colSpan={5} className="inventory-empty">Chưa ghi nhận thiết bị nào.</TableCell></TableRow>
                 ) : activeRun.scans.map(scan => (
@@ -763,6 +879,8 @@ const InventoryQr: React.FC = () => {
               <TableBody>
                 {!activeRun ? (
                   <TableRow><TableCell colSpan={3} className="inventory-empty">Tạo đợt kiểm kê để xem danh sách.</TableCell></TableRow>
+                ) : activeRun.isServerSummaryOnly ? (
+                  <TableRow><TableCell colSpan={3} className="inventory-empty">Có {missingDeviceCount} thiết bị chưa quét theo số liệu máy chủ.</TableCell></TableRow>
                 ) : missingDevices.length === 0 ? (
                   <TableRow><TableCell colSpan={3} className="inventory-empty"><XCircle size={16} /> Không còn thiết bị chưa quét.</TableCell></TableRow>
                 ) : missingDevices.slice(0, 12).map((device: DeviceData) => (

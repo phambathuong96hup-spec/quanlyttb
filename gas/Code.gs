@@ -5,6 +5,8 @@ const SHEETS = {
   transfers: 'Transfers',
   gsp: 'GSP',
   inventoryRuns: 'InventoryRuns',
+  workflowOverrides: 'OperationalWorkflows',
+  costEntries: 'CostEntries',
   documents: 'Documents',
   logs: 'ActivityLogs'
 };
@@ -66,7 +68,7 @@ const DOCUMENT_HEADERS = [
 ];
 
 const USER_HEADERS = ['Tên đăng nhập', 'Mã PIN', 'Quyền hạn', 'Họ và Tên', 'Email', 'Khoa/Phòng', 'Trạng thái'];
-const REPAIR_HEADERS = ['Thời gian', 'Mã Máy/Thiết bị', 'Người báo lỗi', 'Email người báo', 'Mô tả lỗi', 'Trạng Thái', 'Người duyệt', 'Ghi chú xử lý'];
+const REPAIR_HEADERS = ['Thời gian', 'Mã Máy/Thiết bị', 'Người báo lỗi', 'Email người báo', 'Tên đăng nhập người báo', 'Khoa/Phòng', 'Mô tả lỗi', 'Trạng Thái', 'Người duyệt', 'Ghi chú xử lý'];
 const TRANSFER_HEADERS = [
   'TransferId',
   'CreatedAt',
@@ -99,6 +101,7 @@ const INVENTORY_RUN_HEADERS = [
   'SheetName',
   'Khoa/Phòng',
   'Người tạo',
+  'Tên đăng nhập người tạo',
   'Ngày tạo',
   'Trạng thái',
   'Tổng thiết bị',
@@ -119,7 +122,11 @@ const INVENTORY_DETAIL_HEADERS = [
   'Ghi chú',
   'Loại dòng'
 ];
+const WORKFLOW_OVERRIDE_HEADERS = ['TaskKey', 'Trạng thái', 'Ghi chú', 'Ngày cập nhật', 'Người cập nhật'];
+const COST_ENTRY_HEADERS = ['CostId', 'DeviceId', 'Ngày', 'Số tiền', 'Loại chi phí', 'Nhà cung cấp', 'Ghi chú', 'Ngày tạo', 'Người tạo'];
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+const LOGIN_MAX_ATTEMPTS = 5;
+const LOGIN_WINDOW_SECONDS = 15 * 60;
 
 function doGet(e) {
   if (e.parameter.action === 'login') {
@@ -142,8 +149,12 @@ function route_(action, payload) {
   let actor;
   switch (action) {
     case 'getDevices':
+      actor = requireAuthenticated_(payload);
+      if (!actor) return authError_();
       return getDevicesJoinedFiltered_(payload);
     case 'getDepartments':
+      actor = requireAuthenticated_(payload);
+      if (!actor) return authError_();
       return getDepartments_();
     case 'login':
       return login_(payload);
@@ -152,20 +163,23 @@ function route_(action, payload) {
       if (!actor) return authError_();
       return getUserRows_()
         .filter(row => userStatus_(row) !== 'inactive')
-        .map(row => {
-           const safeRow = { ...row };
-           delete safeRow['Mã PIN']; // BẢO MẬT: Không trả về mã PIN
-           delete safeRow['Mật khẩu']; // Tương thích dữ liệu cũ, nếu còn
-           return safeRow;
-        });
+        .map(sanitizeUser_);
     case 'getRepairs':
       actor = requireAuthenticated_(payload);
       if (!actor) return authError_();
-      return getRows_(SHEETS.repairs);
+      return filterRepairsForActor_(getRows_(SHEETS.repairs), actor);
     case 'getTransfers':
       actor = requireAuthenticated_(payload);
       if (!actor) return authError_();
-      return getRows_(SHEETS.transfers);
+      return filterTransfersForActor_(getRows_(SHEETS.transfers), actor);
+    case 'getOperationalState':
+      actor = requireAuthenticated_(payload);
+      if (!actor) return authError_();
+      return getOperationalState_();
+    case 'getInventoryRuns':
+      actor = requireAuthenticated_(payload);
+      if (!actor) return authError_();
+      return getInventoryRuns_();
     case 'getGSP':
       actor = requireAuthenticated_(payload);
       if (!actor) return authError_();
@@ -173,11 +187,11 @@ function route_(action, payload) {
     case 'addDevice':
       actor = requireAdmin_(payload);
       if (!actor) return authError_('Chỉ Admin được thêm thiết bị.');
-      return addDevice_(payload);
+      return addDevice_(payload, actor);
     case 'editDevice':
       actor = requireAdmin_(payload);
       if (!actor) return authError_('Chỉ Admin được sửa thiết bị.');
-      return editDevice_(payload);
+      return editDevice_(payload, actor);
     case 'importSnapshotDevices':
       actor = requireAdmin_(payload);
       if (!actor) return authError_('Chỉ Admin được import snapshot thiết bị.');
@@ -187,7 +201,9 @@ function route_(action, payload) {
       if (!actor) return authError_();
       payload.userName = userDisplayName_(actor);
       payload.userEmail = userEmail_(actor);
-      return reportRepair_(payload);
+      payload.actorUsername = userUsername_(actor);
+      payload.actorDepartment = userDepartment_(actor);
+      return reportRepair_(payload, actor);
     case 'approveRepair':
       actor = requireAuthenticated_(payload);
       if (!actor) return authError_();
@@ -195,7 +211,7 @@ function route_(action, payload) {
         return authError_('Chỉ Admin được duyệt/cập nhật sửa chữa; khoa báo hỏng chỉ được xác nhận nhận lại máy.');
       }
       payload.approver = userDisplayName_(actor);
-      return approveRepair_(payload);
+      return approveRepair_(payload, actor);
     case 'updateDocStatus':
       actor = requireAuthenticated_(payload);
       if (!actor) return authError_();
@@ -243,7 +259,19 @@ function route_(action, payload) {
       actor = requireAuthenticated_(payload);
       if (!actor) return authError_();
       payload.recorder = userDisplayName_(actor);
-      return addGSP_(payload);
+      return addGSP_(payload, actor);
+    case 'saveWorkflowOverride':
+      actor = requireAdmin_(payload);
+      if (!actor) return authError_('Chỉ Admin được cập nhật quy trình vận hành.');
+      return saveWorkflowOverride_(payload, actor);
+    case 'addCostEntry':
+      actor = requireAdmin_(payload);
+      if (!actor) return authError_('Chỉ Admin được thêm chi phí.');
+      return addCostEntry_(payload, actor);
+    case 'deleteCostEntry':
+      actor = requireAdmin_(payload);
+      if (!actor) return authError_('Chỉ Admin được xóa chi phí.');
+      return deleteCostEntry_(payload, actor);
     case 'saveInventoryRun':
       actor = requireAuthenticated_(payload);
       if (!actor) return authError_();
@@ -262,32 +290,158 @@ function route_(action, payload) {
 }
 
 function login_(payload) {
-  const users = getUserRows_();
   const username = String(payload.username || '').trim();
   const pin = String(payload.pin || payload.password || '').trim();
-  
+
   if (!username || !pin) {
     return { success: false, message: 'Vui lòng nhập tên đăng nhập và mã PIN.' };
   }
-  
-  const user = users.find(u => {
+
+  try {
+    sessionSecret_();
+    pinPepper_();
+  } catch (err) {
+    console.error('login_ configuration error', err);
+    return { success: false, message: 'Hệ thống đăng nhập chưa được cấu hình an toàn. Vui lòng liên hệ quản trị viên.' };
+  }
+
+  const user = getUserRows_().find(u => {
     const account = getUserField_(u, ['Tên đăng nhập', 'Ten dang nhap', 'Username', 'Tài khoản', 'Tai khoan', 'username']);
     const email = getUserField_(u, ['Email', 'email']);
-    const userPin = getUserField_(u, ['Mã PIN', 'Ma PIN', 'PIN', 'pin', 'Mật khẩu', 'Mat khau', 'Password', 'password', 'Mã pin', 'MÃ PIN']);
-    return (normalize_(account) === normalize_(username) || normalize_(email) === normalize_(username)) && String(userPin).trim() === pin;
+    return normalize_(account) === normalize_(username) || normalize_(email) === normalize_(username);
   });
-  
-  if (user) {
-    if (userStatus_(user) === 'inactive') {
-      return { success: false, message: 'Tài khoản đã bị khóa.' };
-    }
-    const safeUser = { ...user };
-    // Xóa các trường nhạy cảm trước khi trả về
-    ['Mã PIN', 'Ma PIN', 'PIN', 'pin', 'Mật khẩu', 'Mat khau', 'Password', 'password', 'Mã pin', 'MÃ PIN'].forEach(k => delete safeUser[k]);
-    const session = createSessionToken_(user);
-    return { success: true, user: safeUser, token: session.token, expiresAt: session.expiresAt };
+  const rateIdentity = user ? userUsername_(user) : username;
+  const limit = loginRateLimit_(rateIdentity);
+  if (!limit.allowed) {
+    return { success: false, message: 'Tài khoản tạm khóa do đăng nhập sai nhiều lần. Vui lòng thử lại sau.' };
   }
-  return { success: false, message: 'Tên đăng nhập hoặc mã PIN không chính xác.' };
+
+  if (!user) {
+    recordLoginFailure_(rateIdentity);
+    return { success: false, message: 'Tên đăng nhập hoặc mã PIN không chính xác.' };
+  }
+  if (userStatus_(user) === 'inactive') {
+    return { success: false, message: 'Tài khoản đã bị khóa.' };
+  }
+
+  const storedPin = String(getUserField_(user, pinFieldKeys_()) || '').trim();
+  if (!verifyPin_(pin, storedPin)) {
+    recordLoginFailure_(rateIdentity);
+    return { success: false, message: 'Tên đăng nhập hoặc mã PIN không chính xác.' };
+  }
+
+  if (!isHashedPin_(storedPin)) {
+    const rowIndex = findUserRowIndex_(userUsername_(user));
+    if (rowIndex < 2) {
+      return { success: false, message: 'Không thể nâng cấp bảo mật mã PIN cho tài khoản.' };
+    }
+    const update = {};
+    update[pinStorageKey_(user)] = hashPin_(pin);
+    updateUserRowByObject_(rowIndex, update);
+    logActivity_(
+      'Nâng cấp bảo mật PIN',
+      userUsername_(user),
+      userDisplayName_(user),
+      'Đã chuyển PIN legacy sang định dạng hash có salt.',
+      user
+    );
+  }
+
+  clearLoginFailures_(rateIdentity);
+  const session = createSessionToken_(user);
+  return { success: true, user: sanitizeUser_(user), token: session.token, expiresAt: session.expiresAt };
+}
+
+function pinFieldKeys_() {
+  return ['Mã PIN', 'Ma PIN', 'PIN', 'pin', 'Mật khẩu', 'Mat khau', 'Password', 'password', 'Mã pin', 'MÃ PIN'];
+}
+
+function pinStorageKey_(user) {
+  const keys = pinFieldKeys_();
+  for (let index = 0; index < keys.length; index += 1) {
+    if (Object.prototype.hasOwnProperty.call(user, keys[index]) && String(user[keys[index]] || '').trim()) {
+      return keys[index];
+    }
+  }
+
+  const wanted = keys.map(normalizeHeader_);
+  const actual = Object.keys(user).find(key => wanted.indexOf(normalizeHeader_(key)) !== -1);
+  return actual || 'Mã PIN';
+}
+
+function sanitizeUser_(user) {
+  const safeUser = { ...user };
+  const sensitiveHeaders = pinFieldKeys_().map(normalizeHeader_);
+  Object.keys(safeUser).forEach(key => {
+    if (sensitiveHeaders.indexOf(normalizeHeader_(key)) !== -1) delete safeUser[key];
+  });
+  return safeUser;
+}
+
+function isHashedPin_(storedPin) {
+  return String(storedPin || '').indexOf('v1$') === 0;
+}
+
+function hashPin_(pin) {
+  const salt = Utilities.getUuid();
+  const digest = Utilities.computeHmacSha256Signature(salt + ':' + String(pin || ''), pinPepper_());
+  return 'v1$' + salt + '$' + stripBase64Padding_(Utilities.base64EncodeWebSafe(digest));
+}
+
+function verifyPin_(pin, storedPin) {
+  const stored = String(storedPin || '').trim();
+  if (!isHashedPin_(stored)) return constantTimeEqual_(String(pin || ''), stored);
+
+  const parts = stored.split('$');
+  if (parts.length !== 3 || !parts[1] || !parts[2]) return false;
+  const digest = Utilities.computeHmacSha256Signature(parts[1] + ':' + String(pin || ''), pinPepper_());
+  const expected = stripBase64Padding_(Utilities.base64EncodeWebSafe(digest));
+  return constantTimeEqual_(expected, parts[2]);
+}
+
+function loginRateKey_(username) {
+  const digest = Utilities.computeHmacSha256Signature('login-rate:' + normalize_(username), sessionSecret_());
+  return 'login-rate:' + stripBase64Padding_(Utilities.base64EncodeWebSafe(digest));
+}
+
+function loginRateState_(username) {
+  const cache = CacheService.getScriptCache();
+  const raw = cache.get(loginRateKey_(username));
+  if (!raw) return { attempts: 0, firstAttemptAt: 0, lockedUntil: 0 };
+  try {
+    const state = JSON.parse(raw);
+    return {
+      attempts: Number(state.attempts) || 0,
+      firstAttemptAt: Number(state.firstAttemptAt) || 0,
+      lockedUntil: Number(state.lockedUntil) || 0
+    };
+  } catch (err) {
+    cache.remove(loginRateKey_(username));
+    return { attempts: 0, firstAttemptAt: 0, lockedUntil: 0 };
+  }
+}
+
+function loginRateLimit_(username) {
+  const state = loginRateState_(username);
+  return { allowed: !state.lockedUntil || state.lockedUntil <= Date.now() };
+}
+
+function recordLoginFailure_(username) {
+  const cache = CacheService.getScriptCache();
+  const now = Date.now();
+  const state = loginRateState_(username);
+  const withinWindow = state.firstAttemptAt && now - state.firstAttemptAt < LOGIN_WINDOW_SECONDS * 1000;
+  const attempts = withinWindow ? state.attempts + 1 : 1;
+  const nextState = {
+    attempts: attempts,
+    firstAttemptAt: withinWindow ? state.firstAttemptAt : now,
+    lockedUntil: attempts >= LOGIN_MAX_ATTEMPTS ? now + LOGIN_WINDOW_SECONDS * 1000 : 0
+  };
+  cache.put(loginRateKey_(username), JSON.stringify(nextState), LOGIN_WINDOW_SECONDS);
+}
+
+function clearLoginFailures_(username) {
+  CacheService.getScriptCache().remove(loginRateKey_(username));
 }
 
 function createSessionToken_(user) {
@@ -306,9 +460,9 @@ function createSessionToken_(user) {
 function verifySessionToken_(token) {
   const parts = String(token || '').split('.');
   if (parts.length !== 2) return null;
-  if (!constantTimeEqual_(signSessionValue_(parts[0]), parts[1])) return null;
 
   try {
+    if (!constantTimeEqual_(signSessionValue_(parts[0]), parts[1])) return null;
     const body = JSON.parse(Utilities.newBlob(Utilities.base64DecodeWebSafe(padBase64_(parts[0]))).getDataAsString());
     if (!body.username || Number(body.expiresAt) <= Date.now()) return null;
     const user = findUser_(body.username);
@@ -363,8 +517,18 @@ function signSessionValue_(value) {
 
 function sessionSecret_() {
   const configured = PropertiesService.getScriptProperties().getProperty('SESSION_SECRET');
-  if (configured) return configured;
-  return ScriptApp.getScriptId() + ':' + DEVICE_SPREADSHEET_ID + ':' + USERS_SPREADSHEET_ID;
+  if (!configured || String(configured).length < 32) {
+    throw new Error('SESSION_SECRET phải được cấu hình với tối thiểu 32 ký tự.');
+  }
+  return String(configured);
+}
+
+function pinPepper_() {
+  const configured = PropertiesService.getScriptProperties().getProperty('PIN_PEPPER');
+  if (!configured || String(configured).length < 32) {
+    throw new Error('PIN_PEPPER phải được cấu hình với tối thiểu 32 ký tự.');
+  }
+  return String(configured);
 }
 
 function stripBase64Padding_(value) {
@@ -394,6 +558,8 @@ function setupSheets() {
   ensureSheet_(SHEETS.transfers, TRANSFER_HEADERS);
   ensureSheet_(SHEETS.gsp, GSP_HEADERS);
   ensureSheet_(SHEETS.inventoryRuns, INVENTORY_RUN_HEADERS);
+  ensureSheet_(SHEETS.workflowOverrides, WORKFLOW_OVERRIDE_HEADERS);
+  ensureSheet_(SHEETS.costEntries, COST_ENTRY_HEADERS);
   ensureSheet_(SHEETS.documents, DOCUMENT_HEADERS);
   ensureSheet_(SHEETS.logs, LOG_HEADERS);
 }
@@ -616,7 +782,7 @@ function getDevicesJoinedFiltered_(payload) {
 }
 
 
-function addDevice_(payload) {
+function addDevice_(payload, actor) {
   const id = payload.serial || nextDeviceId_();
   appendObject_(SHEETS.devices, {
     id,
@@ -630,12 +796,14 @@ function addDevice_(payload) {
     'Ngày cập nhật': new Date()
   });
   syncDeviceStatusForDevice_(id);
+  logActivity_('Thêm thiết bị', id, payload.name || '', 'Khoa/phòng: ' + String(payload.department || ''), actor);
   return { success: true, message: 'Đã thêm thiết bị.' };
 }
 
-function editDevice_(payload) {
+function editDevice_(payload, actor) {
   const rowIndex = findDeviceRow_(payload.serial || payload.id);
   if (rowIndex < 2) return { success: false, message: 'Không tìm thấy thiết bị.' };
+  const before = rowObject_(SHEETS.devices, rowIndex);
   updateRowByObject_(SHEETS.devices, rowIndex, {
     'Tên Thiết bị': payload.name,
     'Seri Máy': payload.serial,
@@ -645,6 +813,13 @@ function editDevice_(payload) {
     'Ngày cập nhật': new Date()
   });
   syncDeviceStatusForDevice_(payload.serial || payload.id);
+  logActivity_(
+    'Sửa thiết bị',
+    payload.serial || payload.id,
+    payload.name || before['Tên Thiết bị'] || '',
+    'Khoa/phòng: "' + String(before['Nơi đặt thiết bị'] || '') + '" -> "' + String(payload.department || '') + '".',
+    actor
+  );
   return { success: true, message: 'Đã cập nhật thiết bị.' };
 }
 
@@ -804,6 +979,14 @@ function createTransfer_(payload) {
     evidenceLabel: 'Ảnh minh chứng giao'
   });
 
+  logActivity_(
+    'Tạo luân chuyển',
+    deviceId,
+    device['Tên Thiết bị'] || device.name || '',
+    'Mã phiếu ' + transferId + ': ' + fromDepartment + ' -> ' + toDepartment + '.',
+    actor
+  );
+
   return { success: true, message: 'Đã gửi yêu cầu luân chuyển sang ' + toDepartment + '. Chờ khoa nhận xác nhận.', transferId };
 }
 
@@ -813,6 +996,9 @@ function createTransferTypeRequest_(payload) {
   const actor = findUser_(payload.actorUsername);
   if (!deviceType || !toDepartment) return { success: false, message: 'Thiếu loại thiết bị hoặc khoa/phòng nhận.' };
   if (!actor) return { success: false, message: 'Không xác thực được người tạo yêu cầu.' };
+  if (!isAdmin_(actor) && normalize_(userDepartment_(actor)) !== normalize_(toDepartment)) {
+    return { success: false, message: 'Tài khoản thường chỉ được tạo yêu cầu cho chính khoa/phòng nhận của mình.' };
+  }
 
   const imageUrl = uploadImageToDrive_(payload, 'AnhYeuCauLuanChuyen');
   let reqNote = payload.reason || payload.note || '';
@@ -839,6 +1025,14 @@ function createTransferTypeRequest_(payload) {
     RequestedAt: now,
     UpdatedAt: now
   });
+
+  logActivity_(
+    'Tạo luân chuyển theo loại',
+    transferId,
+    deviceType,
+    'Yêu cầu ' + String(payload.quantity || 1) + ' thiết bị cho ' + toDepartment + '.',
+    actor
+  );
 
   return { success: true, message: 'Đã gửi yêu cầu theo loại thiết bị. Chờ Admin chọn máy cụ thể.', transferId };
 }
@@ -886,6 +1080,14 @@ function assignTransferDevice_(payload) {
     evidenceUrl: '',
     evidenceLabel: ''
   });
+
+  logActivity_(
+    'Gán thiết bị luân chuyển',
+    deviceId,
+    device['Tên Thiết bị'] || device.name || '',
+    'Đã gán thiết bị vào phiếu ' + String(transfer.TransferId || '') + '.',
+    actor
+  );
 
   return { success: true, message: 'Đã gán máy cụ thể. Phiếu chuyển sang trạng thái chờ khoa nhận xác nhận.' };
 }
@@ -967,6 +1169,14 @@ function receiveTransfer_(payload) {
     evidenceLabel: 'Ảnh minh chứng nhận'
   });
 
+  logActivity_(
+    'Nhận luân chuyển',
+    transfer.DeviceId,
+    transfer.DeviceName || '',
+    'Hoàn tất phiếu ' + String(transfer.TransferId || '') + ', chuyển đến ' + String(transfer.ToDepartment || '') + '.',
+    actor
+  );
+
   return { success: true, message: 'Đã xác nhận nhận thiết bị và cập nhật khoa/phòng sử dụng.' };
 }
 
@@ -998,6 +1208,14 @@ function rejectTransfer_(payload) {
     note: payload.reason || ''
   });
 
+  logActivity_(
+    'Từ chối luân chuyển',
+    transfer.DeviceId || transfer.TransferId,
+    transfer.DeviceName || '',
+    'Từ chối phiếu ' + String(transfer.TransferId || '') + ': ' + String(payload.reason || ''),
+    actor
+  );
+
   return { success: true, message: 'Đã từ chối yêu cầu luân chuyển.' };
 }
 
@@ -1025,6 +1243,14 @@ function cancelTransfer_(payload) {
     actor,
     note: payload.reason || 'Đã hủy yêu cầu'
   });
+
+  logActivity_(
+    'Hủy luân chuyển',
+    transfer.DeviceId || transfer.TransferId,
+    transfer.DeviceName || '',
+    'Hủy phiếu ' + String(transfer.TransferId || '') + ': ' + String(payload.reason || 'Đã hủy yêu cầu'),
+    actor
+  );
 
   return { success: true, message: 'Đã hủy yêu cầu luân chuyển.' };
 }
@@ -1062,7 +1288,16 @@ function uploadImageToDrive_(payload, folderName) {
   }
 }
 
-function reportRepair_(payload) {
+function isPharmacyDepartment_(department) {
+  return normalizeHeader_(department).indexOf('khoaduoc') !== -1;
+}
+
+function reportRepairDeviceStatus_(device) {
+  const department = device ? (device['Nơi đặt thiết bị'] || device.department || '') : '';
+  return isPharmacyDepartment_(department) ? 'Hỏng chờ xử lý' : 'Báo hỏng - chờ duyệt';
+}
+
+function reportRepair_(payload, actor) {
   const deviceId = payload.deviceId || payload.serial || '';
   const cleanDeviceId = String(deviceId).replace('[KHẨN] ', '').trim();
   
@@ -1077,22 +1312,32 @@ function reportRepair_(payload) {
     'Mã Máy/Thiết bị': deviceId,
     'Người báo lỗi': payload.userName || payload.name || '',
     'Email người báo': payload.userEmail || payload.email || '',
+    'Tên đăng nhập người báo': payload.actorUsername || '',
+    'Khoa/Phòng': payload.actorDepartment || '',
     'Mô tả lỗi': description,
     'Trạng Thái': 'Chờ duyệt'
   });
 
   const deviceRowIndex = findDeviceRow_(cleanDeviceId);
+  const device = findDeviceById_(cleanDeviceId);
   if (deviceRowIndex >= 2) {
     updateRowByObject_(SHEETS.devices, deviceRowIndex, {
-      'Hiện trạng thực tế': 'Báo hỏng - chờ duyệt',
+      'Hiện trạng thực tế': reportRepairDeviceStatus_(device),
       'Ngày cập nhật': new Date()
     });
     syncDeviceStatusForDevice_(cleanDeviceId);
   }
 
+  logActivity_(
+    'Báo hỏng',
+    cleanDeviceId,
+    device ? (device['Tên Thiết bị'] || '') : '',
+    String(payload.description || ''),
+    actor
+  );
+
   // Gửi email thông báo báo hỏng
   try {
-    const device = findDeviceById_(cleanDeviceId);
     const recipients = device ? getDeviceRecipients_(device) : adminEmails_();
       if (recipients.length > 0) {
         sendNotificationMail_({
@@ -1118,7 +1363,7 @@ function reportRepair_(payload) {
   return { success: true, message: 'Đã ghi nhận báo hỏng.' };
 }
 
-function approveRepair_(payload) {
+function approveRepair_(payload, actor) {
   const rows = getRows_(SHEETS.repairs);
   const idx = rows.findIndex(row => String(row['Thời gian']) === String(payload.rowId));
   if (idx < 0) return { success: false, message: 'Không tìm thấy phiếu sửa chữa.' };
@@ -1189,6 +1434,14 @@ function approveRepair_(payload) {
       }
   } catch (err) { console.error('approveRepair_ email failed', err); }
 
+  logActivity_(
+    'Cập nhật sửa chữa',
+    deviceId,
+    repairRow['Mã Máy/Thiết bị'] || '',
+    'Trạng thái: ' + newStatus + (payload.note ? '; Ghi chú: ' + payload.note : ''),
+    actor
+  );
+
   return { success: true, message: 'Đã cập nhật phiếu sửa chữa.' };
 }
 
@@ -1200,11 +1453,9 @@ function canConfirmRepairCompletion_(payload, actor) {
   const repairRow = rows.find(row => String(row['Thời gian']) === String(payload.rowId));
   if (!repairRow) return false;
 
-  const actorEmail = normalize_(userEmail_(actor));
-  const actorName = normalize_(userDisplayName_(actor));
-  const reporterEmail = normalize_(repairRow['Email người báo']);
-  const reporterName = normalize_(repairRow['Người báo lỗi']);
-  if ((actorEmail && actorEmail === reporterEmail) || (actorName && actorName === reporterName)) {
+  const actorUsername = normalize_(userUsername_(actor));
+  const reporterUsername = normalize_(repairRow['Tên đăng nhập người báo']);
+  if (actorUsername && reporterUsername && actorUsername === reporterUsername) {
     return true;
   }
 
@@ -1255,6 +1506,14 @@ function hasDocumentAccess_(actor, device, doc) {
   }
   
   return false;
+}
+
+function hasDocumentCreateAccess_(actor, device) {
+  if (!actor || !device) return false;
+  if (isAdmin_(actor)) return true;
+  const actorDepartment = normalize_(userDepartment_(actor));
+  const deviceDepartment = normalize_(device['Nơi đặt thiết bị'] || device.department || '');
+  return Boolean(actorDepartment && deviceDepartment && actorDepartment === deviceDepartment);
 }
 
 function updateDocStatus_(payload, actor) {
@@ -1334,7 +1593,10 @@ function addDocument_(payload, actor) {
   }
   
   // Kiểm tra quyền truy cập tài liệu
-  if (!hasDocumentAccess_(actor, device, existingDoc || payload)) {
+  const canWriteDocument = existingDoc
+    ? hasDocumentAccess_(actor, device, existingDoc)
+    : hasDocumentCreateAccess_(actor, device);
+  if (!canWriteDocument) {
     return { success: false, message: 'Bạn không có quyền thêm hoặc sửa đổi tài liệu cho thiết bị này.' };
   }
   
@@ -1433,7 +1695,7 @@ function addDocument_(payload, actor) {
   }
 }
 
-function addGSP_(payload) {
+function addGSP_(payload, actor) {
   appendObject_(SHEETS.gsp, {
     date: new Date(),
     shift: payload.shift,
@@ -1443,12 +1705,174 @@ function addGSP_(payload) {
     note: payload.note,
     recorder: payload.recorder
   });
+  logActivity_('Lưu nhật ký GSP', '', '', 'Đã lưu số liệu nhiệt độ/độ ẩm ca ' + String(payload.shift || '') + '.', actor);
   return { success: true, message: 'Đã lưu nhật ký GSP.' };
+}
+
+function getOperationalState_() {
+  const workflowOverrides = getRows_(SHEETS.workflowOverrides).reduce((state, row) => {
+    const taskKey = String(row.TaskKey || '').trim();
+    if (!taskKey) return state;
+    state[taskKey] = {
+      status: String(row['Trạng thái'] || 'todo').trim() || 'todo',
+      note: String(row['Ghi chú'] || '').trim(),
+      updatedAt: String(row['Ngày cập nhật'] || '').trim(),
+      updatedBy: String(row['Người cập nhật'] || '').trim()
+    };
+    return state;
+  }, {});
+
+  const costEntries = getRows_(SHEETS.costEntries).map(row => ({
+    id: String(row.CostId || '').trim(),
+    deviceId: String(row.DeviceId || '').trim(),
+    date: String(row['Ngày'] || '').trim(),
+    amount: operationalNumber_(row['Số tiền']),
+    category: String(row['Loại chi phí'] || '').trim(),
+    vendor: String(row['Nhà cung cấp'] || '').trim(),
+    note: String(row['Ghi chú'] || '').trim(),
+    createdAt: String(row['Ngày tạo'] || '').trim(),
+    createdBy: String(row['Người tạo'] || '').trim()
+  })).filter(entry => entry.id && entry.deviceId).reverse();
+
+  return { success: true, data: { workflowOverrides: workflowOverrides, costEntries: costEntries } };
+}
+
+function saveWorkflowOverride_(payload, actor) {
+  const taskKey = String(payload.taskKey || '').trim();
+  if (!taskKey) return { success: false, message: 'Thiếu mã công việc.' };
+
+  const validStatuses = ['todo', 'preparing', 'submitted', 'approved', 'returned'];
+  const existing = getRowsWithRowIndex_(SHEETS.workflowOverrides)
+    .find(entry => String(entry.data.TaskKey || '').trim() === taskKey);
+  const status = payload.status === undefined
+    ? String(existing && existing.data['Trạng thái'] || 'todo').trim()
+    : String(payload.status || '').trim();
+  if (validStatuses.indexOf(status) === -1) {
+    return { success: false, message: 'Trạng thái quy trình không hợp lệ.' };
+  }
+
+  const note = payload.note === undefined
+    ? String(existing && existing.data['Ghi chú'] || '').trim()
+    : String(payload.note || '').trim();
+  const updatedAt = new Date();
+  const row = {
+    TaskKey: taskKey,
+    'Trạng thái': status,
+    'Ghi chú': note,
+    'Ngày cập nhật': updatedAt,
+    'Người cập nhật': userDisplayName_(actor)
+  };
+  if (existing) updateRowByObject_(SHEETS.workflowOverrides, existing.rowIndex, row);
+  else appendObject_(SHEETS.workflowOverrides, row);
+
+  logActivity_('Lưu quy trình vận hành', taskKey, '', 'Trạng thái: ' + status + (note ? '; Ghi chú: ' + note : ''), actor);
+  return {
+    success: true,
+    message: 'Đã lưu trạng thái quy trình.',
+    data: { taskKey: taskKey, status: status, note: note, updatedAt: updatedAt, updatedBy: userDisplayName_(actor) }
+  };
+}
+
+function addCostEntry_(payload, actor) {
+  const deviceId = String(payload.deviceId || '').trim();
+  const amount = operationalNumber_(payload.amount);
+  if (!deviceId) return { success: false, message: 'Thiếu mã thiết bị.' };
+  if (!isFinite(amount) || amount <= 0) return { success: false, message: 'Chi phí phải là số lớn hơn 0.' };
+  if (findDeviceRow_(deviceId) < 2) return { success: false, message: 'Không tìm thấy thiết bị.' };
+
+  const costId = String(payload.id || payload.costId || ('CP-' + Utilities.getUuid())).trim();
+  const duplicated = getRows_(SHEETS.costEntries).some(row => String(row.CostId || '').trim() === costId);
+  if (duplicated) return { success: false, message: 'Mã chi phí đã tồn tại.' };
+
+  const row = {
+    CostId: costId,
+    DeviceId: deviceId,
+    'Ngày': String(payload.date || '').trim(),
+    'Số tiền': amount,
+    'Loại chi phí': String(payload.category || 'Sửa chữa').trim(),
+    'Nhà cung cấp': String(payload.vendor || 'Chưa nhập').trim(),
+    'Ghi chú': String(payload.note || '').trim(),
+    'Ngày tạo': new Date(),
+    'Người tạo': userDisplayName_(actor)
+  };
+  appendObject_(SHEETS.costEntries, row);
+  logActivity_('Thêm chi phí', deviceId, '', 'Mã chi phí ' + costId + ', số tiền ' + amount + '.', actor);
+  return {
+    success: true,
+    message: 'Đã thêm chi phí.',
+    data: {
+      id: costId,
+      deviceId: deviceId,
+      date: row['Ngày'],
+      amount: amount,
+      category: row['Loại chi phí'],
+      vendor: row['Nhà cung cấp'],
+      note: row['Ghi chú']
+    }
+  };
+}
+
+function deleteCostEntry_(payload, actor) {
+  const costId = String(payload.id || payload.costId || '').trim();
+  if (!costId) return { success: false, message: 'Thiếu mã chi phí.' };
+
+  const existing = getRowsWithRowIndex_(SHEETS.costEntries)
+    .find(entry => String(entry.data.CostId || '').trim() === costId);
+  if (!existing) return { success: false, message: 'Không tìm thấy chi phí.' };
+
+  deviceSpreadsheet_().getSheetByName(SHEETS.costEntries).deleteRow(existing.rowIndex);
+  logActivity_(
+    'Xóa chi phí',
+    existing.data.DeviceId || '',
+    '',
+    'Đã xóa mã chi phí ' + costId + ', số tiền ' + String(existing.data['Số tiền'] || '') + '.',
+    actor
+  );
+  return { success: true, message: 'Đã xóa chi phí.', data: { id: costId } };
+}
+
+function operationalNumber_(value) {
+  if (typeof value === 'number') return value;
+  const text = String(value === undefined || value === null ? '' : value).trim();
+  if (!text) return 0;
+  const direct = Number(text);
+  if (isFinite(direct)) return direct;
+  const normalized = text.replace(/\s/g, '').replace(/\./g, '').replace(',', '.').replace(/[^0-9.-]/g, '');
+  return Number(normalized);
+}
+
+function getInventoryRuns_() {
+  const runs = getRows_(SHEETS.inventoryRuns).map(row => {
+    const sheetName = inventoryText_(row.SheetName);
+    return {
+      runId: inventoryText_(row.RunId),
+      name: inventoryText_(row['Tên đợt'], row.RunId),
+      sheetName: sheetName,
+      department: inventoryText_(row['Khoa/Phòng']) === 'Toàn trung tâm' ? 'all' : inventoryText_(row['Khoa/Phòng']),
+      createdBy: inventoryText_(row['Người tạo']),
+      createdAt: inventoryText_(row['Ngày tạo']),
+      status: inventoryText_(row['Trạng thái']) === 'Đã khóa' ? 'closed' : 'active',
+      totalDevices: operationalNumber_(row['Tổng thiết bị']),
+      scannedCount: operationalNumber_(row['Đã quét']),
+      missingCount: operationalNumber_(row['Chưa quét']),
+      wrongDepartmentCount: operationalNumber_(row['Sai khoa/phòng']),
+      updatedAt: inventoryText_(row['Ngày cập nhật']),
+      syncStatus: 'synced'
+    };
+  }).filter(run => run.runId).reverse();
+  return { success: true, data: runs };
 }
 
 function saveInventoryRun_(payload, actor) {
   const runId = inventoryText_(payload.runId);
   if (!runId) return { success: false, message: 'Thiếu mã đợt kiểm kê.' };
+
+  const existing = getRowsWithRowIndex_(SHEETS.inventoryRuns)
+    .find(entry => inventoryText_(entry.data.RunId) === runId);
+  if (existing && !canMutateInventoryRun_(existing, actor)) {
+    logActivity_('Từ chối sửa kiểm kê', runId, '', 'Tài khoản không phải người tạo đợt kiểm kê.', actor);
+    return { success: false, message: 'Chỉ người tạo đợt kiểm kê hoặc Admin được cập nhật.' };
+  }
 
   const name = inventoryText_(payload.name, runId);
   const scans = Array.isArray(payload.scans) ? payload.scans : [];
@@ -1482,7 +1906,7 @@ function saveInventoryRun_(payload, actor) {
   ]));
 
   replaceSheetRows_(sheetName, INVENTORY_DETAIL_HEADERS, scanRows.concat(missingRows));
-  upsertInventoryRunRegistry_(payload, actor, sheetName, scans, missingDevices);
+  upsertInventoryRunRegistry_(payload, actor, sheetName, scans, missingDevices, existing);
 
   logActivity_(
     'Lưu kiểm kê',
@@ -1501,7 +1925,16 @@ function deleteInventoryRun_(payload, actor) {
 
   const entries = getRowsWithRowIndex_(SHEETS.inventoryRuns);
   const existing = entries.find(entry => inventoryText_(entry.data.RunId) === runId);
-  const sheetName = inventoryText_(payload.sheetName || (existing && existing.data.SheetName));
+  if (!existing) return { success: false, message: 'Không tìm thấy đợt kiểm kê.' };
+  if (!canMutateInventoryRun_(existing, actor)) {
+    logActivity_('Từ chối xóa kiểm kê', runId, '', 'Tài khoản không phải người tạo đợt kiểm kê.', actor);
+    return { success: false, message: 'Chỉ người tạo đợt kiểm kê hoặc Admin được xóa.' };
+  }
+
+  const sheetName = inventoryText_(existing.data.SheetName);
+  if (sheetName && !inventoryCanDeleteSheet_(sheetName)) {
+    return { success: false, message: 'Tên sheet chi tiết kiểm kê không hợp lệ; đã dừng xóa để bảo vệ dữ liệu.' };
+  }
   const ss = deviceSpreadsheet_();
 
   if (sheetName && inventoryCanDeleteSheet_(sheetName)) {
@@ -1511,9 +1944,7 @@ function deleteInventoryRun_(payload, actor) {
     }
   }
 
-  if (existing) {
-    ss.getSheetByName(SHEETS.inventoryRuns).deleteRow(existing.rowIndex);
-  }
+  ss.getSheetByName(SHEETS.inventoryRuns).deleteRow(existing.rowIndex);
 
   logActivity_(
     'Xóa kiểm kê',
@@ -1526,8 +1957,10 @@ function deleteInventoryRun_(payload, actor) {
   return { success: true, message: 'Đã xóa đợt kiểm kê.' };
 }
 
-function upsertInventoryRunRegistry_(payload, actor, sheetName, scans, missingDevices) {
+function upsertInventoryRunRegistry_(payload, actor, sheetName, scans, missingDevices, existingEntry) {
   const runId = inventoryText_(payload.runId);
+  const existing = existingEntry || getRowsWithRowIndex_(SHEETS.inventoryRuns)
+    .find(entry => inventoryText_(entry.data.RunId) === runId);
   const department = inventoryText_(payload.department) === 'all'
     ? 'Toàn trung tâm'
     : inventoryText_(payload.department, 'Chưa phân bổ');
@@ -1537,8 +1970,9 @@ function upsertInventoryRunRegistry_(payload, actor, sheetName, scans, missingDe
     'Tên đợt': inventoryText_(payload.name, runId),
     SheetName: sheetName,
     'Khoa/Phòng': department,
-    'Người tạo': inventoryText_(payload.createdBy, userDisplayName_(actor)),
-    'Ngày tạo': inventoryDateOrText_(payload.createdAt),
+    'Người tạo': existing ? inventoryText_(existing.data['Người tạo']) : userDisplayName_(actor),
+    'Tên đăng nhập người tạo': existing ? inventoryText_(existing.data['Tên đăng nhập người tạo']) : userUsername_(actor),
+    'Ngày tạo': existing ? existing.data['Ngày tạo'] : inventoryDateOrText_(payload.createdAt),
     'Trạng thái': inventoryStatusText_(payload.status),
     'Tổng thiết bị': expectedCount,
     'Đã quét': scans.length,
@@ -1547,8 +1981,6 @@ function upsertInventoryRunRegistry_(payload, actor, sheetName, scans, missingDe
     'Ngày cập nhật': new Date()
   };
 
-  const existing = getRowsWithRowIndex_(SHEETS.inventoryRuns)
-    .find(entry => inventoryText_(entry.data.RunId) === runId);
   if (existing) {
     updateRowByObject_(SHEETS.inventoryRuns, existing.rowIndex, row);
   } else {
@@ -1589,7 +2021,15 @@ function inventorySheetName_(payload) {
 
 function inventoryCanDeleteSheet_(sheetName) {
   const protectedSheets = Object.keys(SHEETS).map(key => SHEETS[key]);
-  return protectedSheets.indexOf(sheetName) === -1;
+  return protectedSheets.indexOf(sheetName) === -1 && String(sheetName || '').indexOf('KK - ') === 0;
+}
+
+function canMutateInventoryRun_(entry, actor) {
+  if (!entry || !actor) return false;
+  if (isAdmin_(actor)) return true;
+  const ownerUsername = normalize_(entry.data && entry.data['Tên đăng nhập người tạo']);
+  const actorUsername = normalize_(userUsername_(actor));
+  return Boolean(ownerUsername && actorUsername && ownerUsername === actorUsername);
 }
 
 function inventoryText_(value, fallback) {
@@ -1635,6 +2075,46 @@ function getDepartments_() {
     if (value) departments[value] = true;
   });
   return Object.keys(departments).sort();
+}
+
+function filterRepairsForActor_(rows, actor) {
+  if (isAdmin_(actor)) return rows;
+
+  const actorUsername = normalize_(userUsername_(actor));
+  const actorDepartment = normalize_(userDepartment_(actor));
+  const needsDeviceDepartment = rows.some(row => !String(row['Khoa/Phòng'] || '').trim());
+  const deviceDepartments = {};
+
+  if (needsDeviceDepartment) {
+    getRows_(SHEETS.devices).forEach(device => {
+      const id = String(device.id || device['Seri Máy'] || '').trim();
+      if (id) deviceDepartments[id] = normalize_(device['Nơi đặt thiết bị'] || device.department || '');
+    });
+  }
+
+  return rows.filter(row => {
+    const reporterUsername = normalize_(row['Tên đăng nhập người báo'] || row.ReporterUsername || '');
+    if (actorUsername && reporterUsername && reporterUsername === actorUsername) return true;
+
+    const deviceId = String(row['Mã Máy/Thiết bị'] || row.DeviceId || '').replace('[KHẨN] ', '').trim();
+    const rowDepartment = normalize_(row['Khoa/Phòng'] || row.Department || '') || deviceDepartments[deviceId] || '';
+    return Boolean(actorDepartment && rowDepartment === actorDepartment);
+  });
+}
+
+function filterTransfersForActor_(rows, actor) {
+  if (isAdmin_(actor)) return rows;
+
+  const username = normalize_(userUsername_(actor));
+  const department = normalize_(userDepartment_(actor));
+  return rows.filter(row => {
+    const participantUsernames = [row.RequestedBy, row.ReceivedBy, row.RejectedBy].map(normalize_);
+    const departments = [row.FromDepartment, row.ToDepartment].map(normalize_);
+    return Boolean(
+      (username && participantUsernames.indexOf(username) !== -1)
+      || (department && departments.indexOf(department) !== -1)
+    );
+  });
 }
 
 function getRows_(sheetName) {
@@ -2263,18 +2743,18 @@ function editUser_(payload) {
   if (rowIndex < 2) {
     return { success: false, message: 'Không tìm thấy tài khoản người dùng cần chỉnh sửa.' };
   }
+  const targetUser = findUser_(targetUsername);
   
   // PIN update verification
   const newPin = String(payload.newPin || payload.pin || '').trim();
   if (newPin !== '') {
     if (isEditingSelf) {
       const currentPinInput = String(payload.currentPin || '').trim();
-      const targetUser = findUser_(targetUsername);
       if (!targetUser) {
         return { success: false, message: 'Không tìm thấy tài khoản người dùng.' };
       }
-      const actualPin = String(getUserField_(targetUser, ['Mã PIN', 'Ma PIN', 'PIN', 'pin', 'Mật khẩu', 'Mat khau', 'Password', 'password', 'Mã pin', 'MÃ PIN']) || '').trim();
-      if (actualPin !== currentPinInput) {
+      const actualPin = String(getUserField_(targetUser, pinFieldKeys_()) || '').trim();
+      if (!verifyPin_(currentPinInput, actualPin)) {
         return { success: false, message: 'Mã PIN hiện tại không chính xác.' };
       }
     }
@@ -2290,27 +2770,60 @@ function editUser_(payload) {
     }
   };
 
-  setIfDefined('Họ và Tên', ['fullName', 'Họ và Tên', 'Họ và tên', 'name']);
-  setIfDefined('Email', ['email', 'Email']);
-  setIfDefined('Khoa/Phòng', ['department', 'Khoa/Phòng', 'Khoa/Phong']);
-  
   if (newPin !== '') {
-    updateData['Mã PIN'] = newPin;
+    updateData[pinStorageKey_(targetUser || { 'Mã PIN': '' })] = hashPin_(newPin);
   }
-  
+
+  let profileEditIgnored = false;
   if (isAdmin_(actor)) {
+    setIfDefined('Họ và Tên', ['fullName', 'Họ và Tên', 'Họ và tên', 'name']);
+    setIfDefined('Email', ['email', 'Email']);
+    setIfDefined('Khoa/Phòng', ['department', 'Khoa/Phòng', 'Khoa/Phong']);
     setIfDefined('Quyền hạn', ['role', 'Quyền hạn', 'Quyen han']);
     setIfDefined('Trạng thái', ['status', 'Trạng thái', 'Trang thai']);
+  } else {
+    const currentUser = targetUser || actor;
+    const protectedFields = [
+      { keys: ['fullName', 'Họ và Tên', 'Họ và tên', 'name'], current: userDisplayName_(currentUser) },
+      { keys: ['email', 'Email'], current: userEmail_(currentUser) },
+      { keys: ['department', 'Khoa/Phòng', 'Khoa/Phong'], current: userDepartment_(currentUser) }
+    ];
+    profileEditIgnored = protectedFields.some(field => {
+      const key = field.keys.find(candidate => payload[candidate] !== undefined);
+      return Boolean(key && normalize_(payload[key]) !== normalize_(field.current));
+    });
+    if (profileEditIgnored) {
+      logActivity_(
+        'Từ chối sửa hồ sơ người dùng',
+        targetUsername,
+        '',
+        'Bỏ qua yêu cầu tự sửa họ tên, email hoặc khoa/phòng; các trường này chỉ Admin được cập nhật.',
+        actor
+      );
+    }
   }
-  
-  updateUserRowByObject_(rowIndex, updateData);
+
+  if (Object.keys(updateData).length > 0) {
+    updateUserRowByObject_(rowIndex, updateData);
+    logActivity_(
+      'Cập nhật người dùng',
+      targetUsername,
+      '',
+      'Đã cập nhật thông tin được phép' + (newPin ? ' và mã PIN băm' : '') + '.',
+      actor
+    );
+  }
   
   // Return the updated user object (without sensitive fields)
   const updatedUser = findUser_(targetUsername);
   if (updatedUser) {
-    const safeUser = { ...updatedUser };
-    ['Mã PIN', 'Ma PIN', 'PIN', 'pin', 'Mật khẩu', 'Mat khau', 'Password', 'password', 'Mã pin', 'MÃ PIN'].forEach(k => delete safeUser[k]);
-    return { success: true, message: 'Cập nhật thông tin người dùng thành công.', user: safeUser };
+    return {
+      success: true,
+      message: profileEditIgnored
+        ? 'Đã bỏ qua họ tên, email và khoa/phòng vì chỉ Admin được cập nhật các trường này.'
+        : 'Cập nhật thông tin người dùng thành công.',
+      user: sanitizeUser_(updatedUser)
+    };
   }
   
   return { success: true, message: 'Cập nhật thông tin người dùng thành công.' };

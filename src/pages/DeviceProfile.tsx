@@ -17,11 +17,24 @@ const DeviceProfile: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { isAuthenticated, username, isAdmin } = useAuth();
-  const { devices, isLoading: isDevicesLoading, refetch: refetchDevices } = useDevices();
-  const { transfers: allTransfers, isLoading: isTransfersLoading, refetch: refetchTransfers } = useTransfers();
-  const { repairs: allRepairs, isLoading: isRepairsLoading } = useRepairs();
-
-  const isLoading = isDevicesLoading || isTransfersLoading || isRepairsLoading;
+  const {
+    devices,
+    isLoading: isDevicesLoading,
+    error: devicesError,
+    refetch: refetchDevices,
+  } = useDevices();
+  const {
+    transfers: allTransfers,
+    isLoading: isTransfersLoading,
+    error: transfersError,
+    refetch: refetchTransfers,
+  } = useTransfers();
+  const {
+    repairs: allRepairs,
+    isLoading: isRepairsLoading,
+    error: repairsError,
+    refetch: refetchRepairs,
+  } = useRepairs();
   const decodedId = decodeURIComponent(id || '');
   const device = devices.find(d => d.id === decodedId) || null;
   const profileStatus = device ? resolveDeviceListStatus(device) : null;
@@ -124,7 +137,20 @@ const DeviceProfile: React.FC = () => {
         </TableRow>
       </TableHead>
       <TableBody>
-        {transfers.length === 0 ? (
+        {isTransfersLoading ? (
+          <TableRow>
+            <TableCell colSpan={4} style={{ textAlign: 'center', padding: '2rem' }}>
+              Đang tải lịch sử luân chuyển...
+            </TableCell>
+          </TableRow>
+        ) : transfersError ? (
+          <TableRow>
+            <TableCell colSpan={4} style={{ textAlign: 'center', color: 'var(--danger)', padding: '2rem' }}>
+              <p>Không tải được lịch sử luân chuyển: {transfersError.message}</p>
+              <Button size="sm" variant="secondary" onClick={() => void refetchTransfers()}>Thử lại</Button>
+            </TableCell>
+          </TableRow>
+        ) : transfers.length === 0 ? (
           <TableRow>
             <TableCell colSpan={4} style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '2rem' }}>
               Chưa có lịch sử luân chuyển.
@@ -153,7 +179,20 @@ const DeviceProfile: React.FC = () => {
         </TableRow>
       </TableHead>
       <TableBody>
-        {repairs.length === 0 ? (
+        {isRepairsLoading ? (
+          <TableRow>
+            <TableCell colSpan={4} style={{ textAlign: 'center', padding: '2rem' }}>
+              Đang tải lịch sử sửa chữa...
+            </TableCell>
+          </TableRow>
+        ) : repairsError ? (
+          <TableRow>
+            <TableCell colSpan={4} style={{ textAlign: 'center', color: 'var(--danger)', padding: '2rem' }}>
+              <p>Không tải được lịch sử sửa chữa: {repairsError.message}</p>
+              <Button size="sm" variant="secondary" onClick={() => void refetchRepairs()}>Thử lại</Button>
+            </TableCell>
+          </TableRow>
+        ) : repairs.length === 0 ? (
           <TableRow>
             <TableCell colSpan={4} style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '2rem' }}>
               Chưa có lịch sử sửa chữa cho thiết bị này.
@@ -422,8 +461,13 @@ const DeviceProfile: React.FC = () => {
 
       <Card>
         <CardBody>
-          {isLoading ? (
+          {isDevicesLoading ? (
             <div style={{ textAlign: 'center', padding: '40px' }}>Đang tải thông tin thiết bị...</div>
+          ) : devicesError ? (
+            <div style={{ textAlign: 'center', padding: '40px', color: 'var(--danger)' }} role="alert">
+              <p>Không tải được thông tin thiết bị: {devicesError.message}</p>
+              <Button variant="secondary" onClick={() => void refetchDevices()}>Thử lại</Button>
+            </div>
           ) : !device ? (
             <div style={{ textAlign: 'center', padding: '40px', color: 'var(--danger)' }}>
               Không tìm thấy thiết bị với mã: <strong>{id}</strong>

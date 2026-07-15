@@ -86,14 +86,6 @@ const Transfers: React.FC<TransfersProps> = ({ defaultTab = 'requests' }) => {
   }, [refetchDevices, refetchTransfers]);
 
   useEffect(() => {
-    setDeviceId(current => {
-      if (current || devices.length === 0) return current;
-      const first = devices.find(d => isAdmin || d.department === userDepartment) || devices[0];
-      return first.id;
-    });
-  }, [devices, isAdmin, userDepartment]);
-
-  useEffect(() => {
     loadData();
   }, [loadData]);
 
@@ -249,9 +241,9 @@ const Transfers: React.FC<TransfersProps> = ({ defaultTab = 'requests' }) => {
     }
   }, [transferType, selectedDevice]);
 
-  useEffect(() => {
-    if (!deviceType && borrowDeviceTypes.length > 0) setDeviceType(borrowDeviceTypes[0]);
-  }, [borrowDeviceTypes, deviceType]);
+  const isTransferFormValid = transferType === 'Trả'
+    ? Boolean(deviceId.trim() && toDepartment.trim() && !stockGuardViolation)
+    : Boolean(deviceType.trim() && userDepartment.trim());
 
   const submitTransfer = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -317,6 +309,7 @@ const Transfers: React.FC<TransfersProps> = ({ defaultTab = 'requests' }) => {
       setReason('');
       setSelectedFile(null);
       if (transferType === 'Trả') setToDepartment('');
+      else setDeviceType('');
       await loadData();
       setActiveTab('requests');
     }
@@ -650,7 +643,7 @@ const Transfers: React.FC<TransfersProps> = ({ defaultTab = 'requests' }) => {
                   {message}
                 </div>
               )}
-              <Button type="submit" variant="primary" className="submit-btn request-submit-btn" icon={isSaving ? <Loader2 size={20} style={{ animation: 'spin 1s linear infinite' }} /> : <Send size={20} />} disabled={isSaving}>
+              <Button type="submit" variant="primary" className="submit-btn request-submit-btn" icon={isSaving ? <Loader2 size={20} style={{ animation: 'spin 1s linear infinite' }} /> : <Send size={20} />} disabled={isSaving || !isTransferFormValid}>
                 {isSaving ? 'Đang gửi...' : 'Gửi yêu cầu sang khoa nhận'}
               </Button>
             </form>

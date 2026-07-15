@@ -27,7 +27,7 @@ interface NotificationItem {
 
 const TopNav: React.FC<TopNavProps> = ({ toggleSidebar }) => {
   const navigate = useNavigate();
-  const { isAuthenticated, username, name, role, email, department, token, expiresAt, login, logout } = useAuth();
+  const { isAuthenticated, isAdmin, username, name, role, email, department, token, expiresAt, login, logout } = useAuth();
   const toast = useToast();
   const [showDropdown, setShowDropdown] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
@@ -53,7 +53,7 @@ const TopNav: React.FC<TopNavProps> = ({ toggleSidebar }) => {
   const [departments, setDepartments] = useState<string[]>([]);
 
   useEffect(() => {
-    if (showEditModal) {
+    if (showEditModal && isAdmin) {
       fetchDepartments()
         .then((depts) => {
           if (Array.isArray(depts)) {
@@ -64,12 +64,12 @@ const TopNav: React.FC<TopNavProps> = ({ toggleSidebar }) => {
           console.error('Lỗi tải danh sách khoa phòng:', err);
         });
     }
-  }, [showEditModal]);
+  }, [isAdmin, showEditModal]);
 
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!editName.trim()) {
+    if (isAdmin && !editName.trim()) {
       toast.error('Vui lòng nhập họ và tên.');
       return;
     }
@@ -93,9 +93,9 @@ const TopNav: React.FC<TopNavProps> = ({ toggleSidebar }) => {
     try {
       const res = await editUser({
         username: username,
-        fullName: editName.trim(),
-        email: editEmail.trim(),
-        department: editDept.trim(),
+        fullName: isAdmin ? editName.trim() : undefined,
+        email: isAdmin ? editEmail.trim() : undefined,
+        department: isAdmin ? editDept.trim() : undefined,
         currentPin: changePin ? currentPin : undefined,
         newPin: changePin ? newPin : undefined,
       });
@@ -146,8 +146,6 @@ const TopNav: React.FC<TopNavProps> = ({ toggleSidebar }) => {
     if (!isAuthenticated) return [];
 
     const list: NotificationItem[] = [];
-    const isAdmin = role?.toLowerCase() === 'admin';
-
     if (isAdmin) {
       // 1. Pending repairs for admin
       repairs.forEach((rep) => {
@@ -211,7 +209,7 @@ const TopNav: React.FC<TopNavProps> = ({ toggleSidebar }) => {
     }
 
     return list;
-  }, [repairs, transfers, isAuthenticated, role, name, email, department, getDeviceName, formatNotificationDate]);
+  }, [repairs, transfers, isAuthenticated, isAdmin, name, email, department, getDeviceName, formatNotificationDate]);
 
   const unreadCount = useMemo(() => {
     return notificationItems.filter(item => !readIds.includes(item.id)).length;
@@ -498,7 +496,7 @@ const TopNav: React.FC<TopNavProps> = ({ toggleSidebar }) => {
             placeholder="Nhập họ và tên..."
             value={editName}
             onChange={(e) => setEditName(e.target.value)}
-            disabled={isSaving}
+            disabled={isSaving || !isAdmin}
             required
             icon={<User size={16} />}
           />
@@ -509,7 +507,7 @@ const TopNav: React.FC<TopNavProps> = ({ toggleSidebar }) => {
             placeholder="Nhập email..."
             value={editEmail}
             onChange={(e) => setEditEmail(e.target.value)}
-            disabled={isSaving}
+            disabled={isSaving || !isAdmin}
             icon={<Mail size={16} />}
           />
 
@@ -520,9 +518,12 @@ const TopNav: React.FC<TopNavProps> = ({ toggleSidebar }) => {
             placeholder="Chọn hoặc nhập khoa phòng..."
             value={editDept}
             onChange={(e) => setEditDept(e.target.value)}
-            disabled={isSaving}
+            disabled={isSaving || !isAdmin}
             icon={<Building2 size={16} />}
           />
+          {!isAdmin && (
+            <p className="profile-edit-hint">Thông tin hồ sơ chỉ do quản trị viên cập nhật. Bạn vẫn có thể đổi mã PIN bên dưới.</p>
+          )}
           <datalist id="edit-profile-depts">
             {departments.map((dept) => (
               <option key={dept} value={dept} />

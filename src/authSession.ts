@@ -15,6 +15,7 @@ export interface AuthState extends AuthUser {
 
 const AUTH_STORAGE_KEY = 'qlttb.auth';
 const LEGACY_KEYS = ['isAuthenticated', 'username', 'userRole', 'userName', 'userEmail', 'userDepartment'];
+export const SESSION_INVALID_EVENT = 'qlttb:session-invalid';
 
 export const emptyAuth: AuthState = {
   isAuthenticated: false,
@@ -47,7 +48,10 @@ export const readAuthSession = (): AuthState => {
     const raw = sessionStorage.getItem(AUTH_STORAGE_KEY);
     if (!raw) return emptyAuth;
     const session = normalizeUser(JSON.parse(raw));
-    if (!session.username) return emptyAuth;
+    if (!session.username || !session.token?.trim()) {
+      sessionStorage.removeItem(AUTH_STORAGE_KEY);
+      return emptyAuth;
+    }
     if (session.expiresAt && session.expiresAt <= Date.now()) {
       sessionStorage.removeItem(AUTH_STORAGE_KEY);
       return emptyAuth;
@@ -66,6 +70,10 @@ export const readAuthSession = (): AuthState => {
 export const writeAuthSession = (user: Partial<AuthUser>): AuthState => {
   const session = normalizeUser(user);
   clearLegacyAuth();
+  if (!session.username || !session.token?.trim()) {
+    sessionStorage.removeItem(AUTH_STORAGE_KEY);
+    return emptyAuth;
+  }
   sessionStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(session));
   return {
     ...session,
@@ -77,6 +85,13 @@ export const writeAuthSession = (user: Partial<AuthUser>): AuthState => {
 export const clearAuthSession = () => {
   sessionStorage.removeItem(AUTH_STORAGE_KEY);
   clearLegacyAuth();
+};
+
+export const invalidateAuthSession = () => {
+  clearAuthSession();
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event(SESSION_INVALID_EVENT));
+  }
 };
 
 export const getAuthPayload = () => {

@@ -1,16 +1,32 @@
-import { getAuthPayload } from '../authSession';
+import { getAuthPayload, invalidateAuthSession } from '../authSession.ts';
 
-import { parseVietnameseDate } from '../utils/dateUtils';
-import devicesSnapshot from '../data/devices.snapshot.json';
-import { unwrapAppsScriptReadResponse } from './apiEnvelope';
+import { parseVietnameseDate } from '../utils/dateUtils.ts';
+import { unwrapAppsScriptReadResponse } from './apiEnvelope.ts';
 
 // WARNING: Hardcoding the GAS URL/key here is a security risk. In production, always use env variables.
 const DEFAULT_GOOGLE_SHEETS_API_URL = 'https://script.google.com/macros/s/AKfycbzHzDXD7Ai6a4rgaNxM0baVnLZPp9kqt3FJS_ljI1NgPuN5_KdJgBW9nbEre7rNp7QOxw/exec';
 
-export const GOOGLE_SHEETS_API_URL = import.meta.env.VITE_THIET_BI_API_URL || DEFAULT_GOOGLE_SHEETS_API_URL;
-const USE_LOCAL_SNAPSHOT = import.meta.env.VITE_USE_LOCAL_SNAPSHOT === 'true';
+const ENV = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {};
+export const GOOGLE_SHEETS_API_URL = ENV.VITE_THIET_BI_API_URL || DEFAULT_GOOGLE_SHEETS_API_URL;
+const USE_LOCAL_SNAPSHOT = ENV.VITE_USE_LOCAL_SNAPSHOT === 'true';
 
 type ApiRow = Record<string, unknown>;
+
+const loadLocalSnapshot = async (): Promise<ApiRow[]> => {
+  const snapshotModule = await import('../data/devices.snapshot.json');
+  return snapshotModule.default as ApiRow[];
+};
+
+const isInvalidSessionResponse = (data: unknown) => {
+  if (!data || typeof data !== 'object') return false;
+  const response = data as ApiRow;
+  if (response.success !== false) return false;
+  const message = String(response.message || '').toLocaleLowerCase('vi');
+  return message.includes('phiên đăng nhập')
+    || message.includes('session')
+    || message.includes('token')
+    || message.includes('xác thực');
+};
 
 const asText = (value: unknown, fallback = '') => {
   if (value === null || value === undefined) return fallback;
@@ -105,12 +121,16 @@ const safeFetch = async (input: RequestInfo, init?: RequestInit) => {
     const response = await fetch(input, init);
     if (!response.ok) {
       const text = await response.text();
+      if (response.status === 401 || response.status === 403) invalidateAuthSession();
       console.error(`HTTP Error ${response.status}:`, text);
       throw new Error(`HTTP ${response.status}`);
     }
     const text = await response.text();
     try {
       const data = JSON.parse(text);
+      if (isInvalidSessionResponse(data)) {
+        invalidateAuthSession();
+      }
       if (data && typeof data === 'object' && data.success === false) {
         console.warn('API returned success=false:', data);
       }
@@ -145,12 +165,12 @@ const postAction = async (action: string, payload: Record<string, unknown> = {})
   }
 };
 
-const postReadAction = async (action: string) => safeFetch(GOOGLE_SHEETS_API_URL, {
+const postReadAction = async <T = unknown>(action: string): Promise<T> => safeFetch(GOOGLE_SHEETS_API_URL, {
   method: 'POST',
   // Note: text/plain is used as a workaround to avoid CORS preflight options requests with Google Apps Script
   headers: { 'Content-Type': 'text/plain;charset=utf-8' },
   body: JSON.stringify({ action, payload: getAuthPayload() }),
-}).then(unwrapAppsScriptReadResponse);
+}).then(response => unwrapAppsScriptReadResponse(response) as T);
 
 const parseDocuments = (rawDocs: unknown[]): DeviceDocument[] => {
   if (!Array.isArray(rawDocs)) return [];
@@ -184,8 +204,8 @@ const parseDocuments = (rawDocs: unknown[]): DeviceDocument[] => {
 
 export const fetchDevices = async (): Promise<DeviceData[]> => {
   const data = USE_LOCAL_SNAPSHOT
-    ? devicesSnapshot
-    : await safeFetch(`${GOOGLE_SHEETS_API_URL}?action=getDevices`);
+    ? await loadLocalSnapshot()
+    : await postReadAction<unknown[]>('getDevices');
   if (!data || !Array.isArray(data)) return [];
 
   const rows = data as ApiRow[];
@@ -438,6 +458,136 @@ export interface InventoryRunSavePayload {
   }>;
 }
 
+export interface OperationalWorkflowOverride {
+  status: 'todo' | 'preparing' | 'submitted' | 'approved' | 'returned';
+  note?: string;
+  updatedAt?: string;
+  updatedBy?: string;
+}
+
+export interface OperationalCostEntry {
+  id: string;
+  deviceId: string;
+  date: string;
+  amount: number;
+  category: string;
+  vendor: string;
+  note: string;
+}
+
+export interface OperationalState {
+  workflowOverrides: Record<string, OperationalWorkflowOverride>;
+  costEntries: OperationalCostEntry[];
+}
+
+export type OperationalPendingOperation =
+  | {
+      id: string;
+      type: 'workflow';
+      payload: {
+        taskKey: string;
+        status: OperationalWorkflowOverride['status'];
+        note?: string;
+      };
+    }
+  | { id: string; type: 'add-cost'; payload: OperationalCostEntry }
+  | { id: string; type: 'delete-cost'; payload: { id: string } };
+
+export interface OperationalMigrationPlan extends OperationalState {
+  pendingOperations: OperationalPendingOperation[];
+}
+
+export const buildOperationalMigrationPlan = (
+  localState: OperationalState,
+  serverState: OperationalState
+): OperationalMigrationPlan => {
+  const localWorkflow = localState.workflowOverrides || {};
+  const serverWorkflow = serverState.workflowOverrides || {};
+  const localCosts = Array.isArray(localState.costEntries) ? localState.costEntries : [];
+  const serverCosts = Array.isArray(serverState.costEntries) ? serverState.costEntries : [];
+
+  const pendingWorkflow: OperationalPendingOperation[] = Object.entries(localWorkflow)
+    .filter(([taskKey, local]) => {
+      const confirmed = serverWorkflow[taskKey];
+      return !confirmed
+        || confirmed.status !== local.status
+        || String(confirmed.note || '') !== String(local.note || '');
+    })
+    .map(([taskKey, override]) => ({
+      id: `legacy-workflow:${taskKey}`,
+      type: 'workflow' as const,
+      payload: {
+        taskKey,
+        status: override.status,
+        note: override.note || '',
+      },
+    }));
+
+  const confirmedCostIds = new Set(serverCosts.map(entry => entry.id));
+  const localOnlyCosts = localCosts.filter(entry => !confirmedCostIds.has(entry.id));
+  const pendingCosts: OperationalPendingOperation[] = localOnlyCosts.map(entry => ({
+    id: `legacy-add-cost:${entry.id}`,
+    type: 'add-cost' as const,
+    payload: entry,
+  }));
+
+  return {
+    workflowOverrides: { ...serverWorkflow, ...localWorkflow },
+    costEntries: [...localOnlyCosts, ...serverCosts],
+    pendingOperations: [...pendingWorkflow, ...pendingCosts],
+  };
+};
+
+export interface InventoryRunSummary {
+  runId: string;
+  name: string;
+  sheetName: string;
+  department: string;
+  createdBy: string;
+  createdAt: string;
+  status: string;
+  totalDevices: number;
+  scannedCount: number;
+  missingCount: number;
+  wrongDepartmentCount: number;
+  updatedAt: string;
+}
+
+export interface ApiActionResponse {
+  success: boolean;
+  message?: string;
+  [key: string]: unknown;
+}
+
+export const fetchOperationalState = async (): Promise<OperationalState> => {
+  const data = await postReadAction<Partial<OperationalState>>('getOperationalState');
+  return {
+    workflowOverrides: data?.workflowOverrides && typeof data.workflowOverrides === 'object'
+      ? data.workflowOverrides
+      : {},
+    costEntries: Array.isArray(data?.costEntries) ? data.costEntries : [],
+  };
+};
+
+export const saveWorkflowOverride = (payload: {
+  taskKey: string;
+  status: OperationalWorkflowOverride['status'];
+  note?: string;
+}): Promise<ApiActionResponse> => postAction('saveWorkflowOverride', payload);
+
+export const addCostEntry = (payload: OperationalCostEntry): Promise<ApiActionResponse> => (
+  postAction('addCostEntry', payload as unknown as Record<string, unknown>)
+);
+
+export const deleteCostEntry = (payload: { id: string }): Promise<ApiActionResponse> => (
+  postAction('deleteCostEntry', payload)
+);
+
+export const fetchInventoryRuns = async (): Promise<InventoryRunSummary[]> => {
+  const data = await postReadAction<unknown>('getInventoryRuns');
+  return Array.isArray(data) ? data as InventoryRunSummary[] : [];
+};
+
 export const fetchGspRecords = async (): Promise<GspRecord[]> => {
   if (USE_LOCAL_SNAPSHOT) return [];
 
@@ -496,13 +646,14 @@ export const addDocument = async (payload: {
 
 export const fetchDepartments = async (): Promise<string[]> => {
   if (USE_LOCAL_SNAPSHOT) {
-    return Array.from(new Set((devicesSnapshot as ApiRow[])
+    const devicesSnapshot = await loadLocalSnapshot();
+    return Array.from(new Set(devicesSnapshot
       .map(item => getText(item, ['department', 'location']))
       .filter(Boolean)))
       .sort();
   }
 
-  const data = await safeFetch(`${GOOGLE_SHEETS_API_URL}?action=getDepartments`);
+  const data = await postReadAction<unknown>('getDepartments');
   if (!data || !Array.isArray(data)) return [];
   return data as string[];
 };

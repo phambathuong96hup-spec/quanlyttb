@@ -534,6 +534,12 @@
   gap: 20px;
 }
 
+.profile-edit-hint {
+  margin: -12px 0 0;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
 .change-pin-section {
   padding: 16px;
   background: var(--surface-50);

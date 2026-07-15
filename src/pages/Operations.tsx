@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { QRCodeSVG } from 'qrcode.react';
 import {
@@ -26,7 +26,18 @@ import {
 import { useDevices } from '../hooks/useDevices';
 import { useRepairs } from '../hooks/useRepairs';
 import { useTransfers } from '../hooks/useTransfers';
+import { useAuth } from '../authContext';
+import {
+  addCostEntry,
+  buildOperationalMigrationPlan,
+  deleteCostEntry,
+  fetchOperationalState,
+  saveWorkflowOverride,
+  type ApiActionResponse,
+  type OperationalPendingOperation,
+} from '../services/api';
 import { parseFlexibleDate } from '../utils/dateUtils';
+import { buildDashboardDeviceSummary } from '../utils/dashboardDeviceStats';
 import {
   buildAuditEvents,
   buildInspectionItems,
@@ -67,6 +78,10 @@ interface ImportPreviewRow {
 
 const WORKFLOW_KEY = 'qlttb.inspectionWorkflow';
 const COST_KEY = 'qlttb.maintenanceCosts';
+const PENDING_KEY = 'qlttb.operations.pending';
+
+type OperationsSyncStatus = 'loading' | 'synced' | 'syncing' | 'pending' | 'error';
+type PendingOperation = OperationalPendingOperation;
 
 const workflowStatusOptions: WorkflowStatus[] = ['todo', 'preparing', 'submitted', 'approved', 'returned'];
 
@@ -89,6 +104,21 @@ const readStorage = <T,>(key: string, fallback: T): T => {
 
 const writeStorage = <T,>(key: string, value: T) => {
   localStorage.setItem(key, JSON.stringify(value));
+};
+
+const clearStorage = (key: string) => localStorage.removeItem(key);
+
+const runPendingOperation = (operation: PendingOperation): Promise<ApiActionResponse> => {
+  if (operation.type === 'workflow') return saveWorkflowOverride(operation.payload);
+  if (operation.type === 'add-cost') return addCostEntry(operation.payload);
+  return deleteCostEntry(operation.payload);
+};
+
+const clearOperationalFallbackWhenSynced = () => {
+  if (readStorage<PendingOperation[]>(PENDING_KEY, []).length > 0) return;
+  clearStorage(PENDING_KEY);
+  clearStorage(WORKFLOW_KEY);
+  clearStorage(COST_KEY);
 };
 
 const toDateKey = (date: Date) => {
@@ -157,6 +187,7 @@ const parseImportPreview = (rawText: string, existingIds: Set<string>): ImportPr
 
 const Operations: React.FC = () => {
   const navigate = useNavigate();
+  const { isAdmin } = useAuth();
   const { devices, isLoading: isLoadingDevices } = useDevices();
   const { repairs, isLoading: isLoadingRepairs } = useRepairs();
   const { transfers, isLoading: isLoadingTransfers } = useTransfers();
@@ -176,6 +207,114 @@ const Operations: React.FC = () => {
   });
   const [selectedDeviceId, setSelectedDeviceId] = useState('');
   const [importText, setImportText] = useState('');
+  const [operationsSyncStatus, setOperationsSyncStatus] = useState<OperationsSyncStatus>('loading');
+  const [operationsSyncError, setOperationsSyncError] = useState('');
+
+  const persistPendingOperation = useCallback(async (operation: PendingOperation) => {
+    const pending = readStorage<PendingOperation[]>(PENDING_KEY, []);
+    const nextPending = operation.type === 'workflow'
+      ? [...pending.filter(item => item.id !== operation.id), operation]
+      : [...pending, operation];
+    writeStorage(PENDING_KEY, nextPending);
+    setOperationsSyncStatus('syncing');
+    setOperationsSyncError('');
+
+    try {
+      const response = await runPendingOperation(operation);
+      if (!response.success) throw new Error(response.message || 'Không thể đồng bộ thay đổi.');
+      const remaining = readStorage<PendingOperation[]>(PENDING_KEY, [])
+        .filter(item => item.id !== operation.id);
+      if (remaining.length > 0) writeStorage(PENDING_KEY, remaining);
+      else clearStorage(PENDING_KEY);
+      setOperationsSyncStatus(remaining.length > 0 ? 'pending' : 'synced');
+      clearOperationalFallbackWhenSynced();
+    } catch (error) {
+      setOperationsSyncStatus('pending');
+      setOperationsSyncError(error instanceof Error ? error.message : 'Không thể đồng bộ thay đổi.');
+    }
+  }, []);
+
+  const loadOperationalState = useCallback(async () => {
+    setOperationsSyncStatus('loading');
+    setOperationsSyncError('');
+    try {
+      const serverState = await fetchOperationalState();
+      const pending = readStorage<PendingOperation[]>(PENDING_KEY, []);
+      const localState = {
+        workflowOverrides: readStorage<WorkflowOverrides>(WORKFLOW_KEY, {}),
+        costEntries: readStorage<CostEntry[]>(COST_KEY, []),
+      };
+      const migration = buildOperationalMigrationPlan(localState, serverState);
+      const pendingWorkflow = pending.reduce<WorkflowOverrides>((overrides, operation) => {
+        if (operation.type !== 'workflow') return overrides;
+        overrides[operation.payload.taskKey] = {
+          status: operation.payload.status,
+          note: operation.payload.note,
+        };
+        return overrides;
+      }, {});
+      const pendingDeleteIds = new Set(
+        pending
+          .filter(operation => operation.type === 'delete-cost')
+          .map(operation => operation.payload.id)
+      );
+      setWorkflowOverrides({
+        ...(migration.workflowOverrides as WorkflowOverrides),
+        ...pendingWorkflow,
+      });
+      setCostEntries(
+        (migration.costEntries as CostEntry[]).filter(entry => !pendingDeleteIds.has(entry.id))
+      );
+
+      if (pending.length === 0) {
+        if (migration.pendingOperations.length > 0) {
+          writeStorage(PENDING_KEY, migration.pendingOperations);
+          setOperationsSyncStatus('pending');
+          if (!isAdmin) {
+            setOperationsSyncError('Dữ liệu cũ đã được giữ lại và cần tài khoản quản trị để đồng bộ.');
+          }
+        } else {
+          clearStorage(WORKFLOW_KEY);
+          clearStorage(COST_KEY);
+          setOperationsSyncStatus('synced');
+        }
+      } else {
+        setOperationsSyncStatus('pending');
+      }
+    } catch (error) {
+      setOperationsSyncStatus('error');
+      setOperationsSyncError(error instanceof Error ? error.message : 'Không tải được dữ liệu điều hành.');
+    }
+  }, [isAdmin]);
+
+  const retryPendingChanges = useCallback(async () => {
+    const pending = readStorage<PendingOperation[]>(PENDING_KEY, []);
+    if (pending.length === 0) {
+      await loadOperationalState();
+      return;
+    }
+    if (!isAdmin) return;
+    setOperationsSyncStatus('syncing');
+    setOperationsSyncError('');
+    const failed: PendingOperation[] = [];
+    for (const operation of pending) {
+      try {
+        const response = await runPendingOperation(operation);
+        if (!response.success) throw new Error(response.message || 'Không thể đồng bộ thay đổi.');
+      } catch (error) {
+        failed.push(operation);
+        setOperationsSyncError(error instanceof Error ? error.message : 'Không thể đồng bộ thay đổi.');
+      }
+    }
+    if (failed.length > 0) writeStorage(PENDING_KEY, failed);
+    else clearStorage(PENDING_KEY);
+    setOperationsSyncStatus(failed.length > 0 ? 'pending' : 'synced');
+    clearOperationalFallbackWhenSynced();
+  }, [isAdmin, loadOperationalState]);
+
+  useEffect(() => {
+    void loadOperationalState();
+  }, [loadOperationalState]);
 
   const today = useMemo(() => new Date(), []);
   const inspectionItems = useMemo(() => buildInspectionItems(devices, today), [devices, today]);
@@ -200,12 +339,18 @@ const Operations: React.FC = () => {
     ? `${window.location.origin}${import.meta.env.BASE_URL.replace(/\/$/, '')}${profilePath}`
     : '';
 
+  const deviceSummary = useMemo(
+    () => buildDashboardDeviceSummary(devices, repairs, today),
+    [devices, repairs, today]
+  );
   const summary = useMemo(() => {
-    const expired = inspectionItems.filter(item => item.statusKind === 'expired').length;
-    const warning = inspectionItems.filter(item => item.statusKind === 'warning').length;
     const totalCost = costEntries.reduce((sum, entry) => sum + entry.amount, 0);
-    return { expired, warning, totalCost };
-  }, [costEntries, inspectionItems]);
+    return {
+      expired: deviceSummary.expiredComplianceCount,
+      warning: deviceSummary.complianceWarningCount,
+      totalCost,
+    };
+  }, [costEntries, deviceSummary]);
 
   const calendarDays = useMemo(() => getCalendarDays(calendarMonth), [calendarMonth]);
   const inspectionByDate = useMemo(() => {
@@ -225,23 +370,34 @@ const Operations: React.FC = () => {
     });
   }, [calendarMonth, inspectionItems]);
 
+  const updateWorkflowDraft = (taskKey: string, patch: Partial<WorkflowOverrides[string]>) => {
+    const current = workflowOverrides[taskKey] || { status: 'todo' as const };
+    setWorkflowOverrides(prev => ({
+      ...prev,
+      [taskKey]: { ...current, ...patch },
+    }));
+  };
+
   const updateWorkflow = (taskKey: string, patch: Partial<WorkflowOverrides[string]>) => {
-    setWorkflowOverrides(prev => {
-      const current = prev[taskKey] || { status: 'todo' as const };
-      const next: WorkflowOverrides = {
-        ...prev,
-        [taskKey]: {
-          ...current,
-          ...patch,
-          updatedAt: new Date().toLocaleDateString('vi-VN'),
-        },
-      };
-      writeStorage(WORKFLOW_KEY, next);
-      return next;
+    if (!isAdmin) return;
+    const current = workflowOverrides[taskKey] || { status: 'todo' as const };
+    const override = {
+      ...current,
+      ...patch,
+      updatedAt: new Date().toISOString(),
+    };
+    const next = { ...workflowOverrides, [taskKey]: override };
+    setWorkflowOverrides(next);
+    writeStorage(WORKFLOW_KEY, next);
+    void persistPendingOperation({
+      id: `workflow:${taskKey}`,
+      type: 'workflow',
+      payload: { taskKey, status: override.status, note: override.note || '' },
     });
   };
 
   const handleAddCost = () => {
+    if (!isAdmin) return;
     const deviceId = costForm.deviceId || selectedDevice?.id || devices[0]?.id || '';
     const amount = Number(costForm.amount);
     if (!deviceId || !Number.isFinite(amount) || amount <= 0) {
@@ -260,13 +416,16 @@ const Operations: React.FC = () => {
     const next = [nextEntry, ...costEntries];
     setCostEntries(next);
     writeStorage(COST_KEY, next);
+    void persistPendingOperation({ id: `add-cost:${nextEntry.id}`, type: 'add-cost', payload: nextEntry });
     setCostForm(prev => ({ ...prev, amount: '', vendor: '', note: '' }));
   };
 
   const handleDeleteCost = (id: string) => {
+    if (!isAdmin) return;
     const next = costEntries.filter(entry => entry.id !== id);
     setCostEntries(next);
     writeStorage(COST_KEY, next);
+    void persistPendingOperation({ id: `delete-cost:${id}:${Date.now()}`, type: 'delete-cost', payload: { id } });
   };
 
   const changeCalendarMonth = (offset: number) => {
@@ -333,7 +492,7 @@ const Operations: React.FC = () => {
       <div className="ops-section-header">
         <div>
           <h2>Nhắc việc kiểm định & quy trình hồ sơ</h2>
-          <p>Mỗi dòng là một việc cần xử lý. Trạng thái và ghi chú được lưu trên máy này để theo dõi nhanh.</p>
+          <p>Mỗi dòng là một việc cần xử lý. Trạng thái và ghi chú được đồng bộ để dùng chung trên nhiều máy.</p>
         </div>
         <Badge variant="warning">{inspectionTasks.length} việc cần theo dõi</Badge>
       </div>
@@ -364,6 +523,7 @@ const Operations: React.FC = () => {
                   className="ops-select"
                   value={task.workflowStatus}
                   onChange={event => updateWorkflow(task.taskKey, { status: event.target.value as WorkflowStatus })}
+                  disabled={!isAdmin}
                 >
                   {workflowStatusOptions.map(status => (
                     <option key={status} value={status}>{getWorkflowLabel(status)}</option>
@@ -374,8 +534,12 @@ const Operations: React.FC = () => {
                 <input
                   className="ops-inline-input"
                   value={workflowOverrides[task.taskKey]?.note || ''}
-                  onChange={event => updateWorkflow(task.taskKey, { note: event.target.value })}
+                  onChange={event => updateWorkflowDraft(task.taskKey, { note: event.target.value })}
+                  onBlur={() => updateWorkflow(task.taskKey, {
+                    note: workflowOverrides[task.taskKey]?.note || '',
+                  })}
                   placeholder="Ghi chú xử lý"
+                  disabled={!isAdmin}
                 />
               </TableCell>
             </TableRow>
@@ -440,7 +604,7 @@ const Operations: React.FC = () => {
         </select>
         <input value={costForm.vendor} onChange={event => setCostForm(prev => ({ ...prev, vendor: event.target.value }))} placeholder="Đơn vị thực hiện" />
         <input value={costForm.note} onChange={event => setCostForm(prev => ({ ...prev, note: event.target.value }))} placeholder="Ghi chú" />
-        <Button icon={<ReceiptText size={16} />} onClick={handleAddCost}>Thêm chi phí</Button>
+        <Button icon={<ReceiptText size={16} />} onClick={handleAddCost} disabled={!isAdmin}>Thêm chi phí</Button>
       </div>
       <div className="ops-cost-list">
         {costEntries.length === 0 ? (
@@ -452,7 +616,7 @@ const Operations: React.FC = () => {
               <span>{entry.deviceId} · {entry.category} · {entry.vendor}</span>
               <small>{entry.date} · {entry.note}</small>
             </div>
-            <Button size="sm" variant="secondary" onClick={() => handleDeleteCost(entry.id)}>Xóa</Button>
+            <Button size="sm" variant="secondary" onClick={() => handleDeleteCost(entry.id)} disabled={!isAdmin}>Xóa</Button>
           </div>
         ))}
       </div>
@@ -554,24 +718,41 @@ const Operations: React.FC = () => {
           <h1><ClipboardCheck size={30} /> Điều hành công việc</h1>
           <p>Lịch kiểm định, nhắc việc, audit log, chi phí, QR và kiểm tra import nằm chung một nơi.</p>
         </div>
-        <div className="operations-loading">
-          {isLoading ? 'Đang tải dữ liệu...' : `${devices.length} thiết bị`}
+        <div className="operations-loading" aria-live="polite">
+          <span>{isLoading ? 'Đang tải dữ liệu...' : `${devices.length} thiết bị`}</span>
+          <span>
+            {operationsSyncStatus === 'loading' || operationsSyncStatus === 'syncing'
+              ? 'Đang đồng bộ...'
+              : operationsSyncStatus === 'synced'
+                ? 'Đã đồng bộ'
+                : operationsSyncStatus === 'pending'
+                  ? 'Chưa đồng bộ'
+                  : 'Lỗi đồng bộ'}
+          </span>
+          {(operationsSyncStatus === 'pending' || operationsSyncStatus === 'error') && (
+            <Button size="sm" variant="secondary" onClick={() => void retryPendingChanges()}>
+              Thử lại
+            </Button>
+          )}
         </div>
       </div>
+      {operationsSyncError && (
+        <div className="ops-footnote" role="alert">Lỗi đồng bộ: {operationsSyncError}. Dữ liệu đang được giữ tạm trên máy này.</div>
+      )}
 
       <div className="ops-stat-grid">
         <Card className="ops-stat-card is-danger">
           <CardBody>
             <AlertTriangle size={22} />
             <strong>{summary.expired}</strong>
-            <span>Hết hạn kiểm định</span>
+            <span>Hết hạn đăng kiểm</span>
           </CardBody>
         </Card>
         <Card className="ops-stat-card is-warning">
           <CardBody>
             <CalendarDays size={22} />
             <strong>{summary.warning}</strong>
-            <span>Cần chuẩn bị hồ sơ</span>
+            <span>Cảnh báo đăng kiểm</span>
           </CardBody>
         </Card>
         <Card className="ops-stat-card is-success">
@@ -607,7 +788,7 @@ const Operations: React.FC = () => {
       {activeTab === 'qr-import' && renderQrImportTab()}
 
       <div className="ops-footnote">
-        Trạng thái quy trình hồ sơ và chi phí đang được lưu nội bộ trên trình duyệt. Khi có sheet/API riêng, phần này có thể nối backend để dùng chung nhiều máy.
+        Dữ liệu điều hành được đồng bộ với máy chủ. localStorage chỉ giữ bản chờ khi mất mạng hoặc đồng bộ lỗi.
       </div>
     </div>
   );

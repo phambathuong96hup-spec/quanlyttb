@@ -34,6 +34,8 @@ interface RepairRequestProps {
   defaultTab?: 'create' | 'requests' | 'history';
 }
 
+const MAX_DEVICE_OPTIONS = 80;
+
 const RepairRequest: React.FC<RepairRequestProps> = ({ defaultTab = 'requests' }) => {
   // ===== Tab state =====
   const [activeTab, setActiveTab] = useState<'create' | 'requests' | 'history'>(defaultTab);
@@ -42,6 +44,7 @@ const RepairRequest: React.FC<RepairRequestProps> = ({ defaultTab = 'requests' }
   const [isSubmitting, setIsSubmitting] = useState(false);
   const { devices, isLoading: isDevicesLoading, refetch: refetchDevices } = useDevices();
   const [deviceId, setDeviceId] = useState('');
+  const [deviceSearch, setDeviceSearch] = useState('');
   const [description, setDescription] = useState('');
   const [priority, setPriority] = useState<'normal' | 'urgent'>('normal');
   const [isScanning, setIsScanning] = useState(false);
@@ -67,6 +70,21 @@ const RepairRequest: React.FC<RepairRequestProps> = ({ defaultTab = 'requests' }
   const isLoading = isDevicesLoading || isRepairsLoading;
   
   const reversedRepairs = useMemo(() => [...repairs].reverse(), [repairs]);
+  const visibleDeviceOptions = useMemo(() => {
+    const matchingDevices = deviceSearch.trim()
+      ? devices.filter(device => matchSmartSearch(
+          device as unknown as Record<string, unknown>,
+          ['id', 'name', 'department'],
+          deviceSearch
+        ))
+      : devices;
+    const limitedDevices = matchingDevices.slice(0, MAX_DEVICE_OPTIONS);
+    const selectedDevice = devices.find(device => device.id === deviceId);
+    if (!selectedDevice || limitedDevices.some(device => device.id === selectedDevice.id)) {
+      return limitedDevices;
+    }
+    return [selectedDevice, ...limitedDevices].slice(0, MAX_DEVICE_OPTIONS);
+  }, [deviceId, deviceSearch, devices]);
 
   // ===== Auth =====
   const { name, email, department, isAdmin } = useAuth();
@@ -436,6 +454,12 @@ const RepairRequest: React.FC<RepairRequestProps> = ({ defaultTab = 'requests' }
             <form className="form-section request-form" onSubmit={handleSubmit}>
               <div className="request-field request-device-field">
                 <label className="input-label">Thiết bị báo hỏng</label>
+                <Input
+                  value={deviceSearch}
+                  onChange={event => setDeviceSearch(event.target.value)}
+                  placeholder="Tìm theo mã, tên hoặc khoa/phòng"
+                  icon={<Search size={16} />}
+                />
                 <div className="request-select-wrap">
                   <select
                     value={deviceId}
@@ -448,15 +472,18 @@ const RepairRequest: React.FC<RepairRequestProps> = ({ defaultTab = 'requests' }
                       cursor: 'pointer', color: 'var(--text-primary)'
                     }}
                   >
-                    {devices.length === 0
-                      ? <option value="">Đang tải danh sách thiết bị...</option>
-                      : devices.map((d, index) => (
-                          <option key={`${d.id}-${index}`} value={d.id}>{d.id} — {d.name} ({d.department})</option>
-                        ))
-                    }
+                    <option value="" disabled>-- Chọn thiết bị --</option>
+                    {visibleDeviceOptions.map((d, index) => (
+                      <option key={`${d.id}-${index}`} value={d.id}>{d.id} — {d.name} ({d.department})</option>
+                    ))}
                   </select>
                   <ChevronDown size={18} className="request-select-chevron" />
                 </div>
+                {devices.length > MAX_DEVICE_OPTIONS && (
+                  <p className="request-field-hint">
+                    Hiển thị tối đa {MAX_DEVICE_OPTIONS} thiết bị. Nhập từ khóa để thu hẹp danh sách.
+                  </p>
+                )}
                 <p className="request-field-hint">
                   Hoặc nhập tay mã thiết bị:
                 </p>
