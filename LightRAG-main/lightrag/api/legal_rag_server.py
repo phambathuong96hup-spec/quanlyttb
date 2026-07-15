@@ -38,6 +38,81 @@ REQUIRED_ANSWER_SECTIONS = [
     "### Việc cần làm",
     "### Lưu ý",
 ]
+MAX_REFERENCES = 3
+DOCUMENT_ALIASES = {
+    "tt-05-2022-byt": (
+        "thong tu 05",
+        "05/2022",
+        "05 2022",
+        "tt 05",
+        "tt-byt 05",
+    ),
+    "tt-19-2021-byt": (
+        "thong tu 19",
+        "19/2021",
+        "19 2021",
+        "tt 19",
+        "tt-byt 19",
+    ),
+    "nd-98-2021-cp": (
+        "nghi dinh 98",
+        "98/2021",
+        "98 2021",
+        "nd 98",
+        "nd-cp 98",
+    ),
+    "nd-117-2020-cp": (
+        "nghi dinh 117",
+        "117/2020",
+        "117 2020",
+        "nd 117",
+        "nd-cp 117",
+    ),
+    "qd-7115-byt": (
+        "quyet dinh 7115",
+        "7115/qd",
+        "7115 qd",
+        "qd 7115",
+    ),
+}
+QUERY_STOPWORDS = {
+    "ai",
+    "cac",
+    "cho",
+    "co",
+    "cua",
+    "den",
+    "dinh",
+    "duoc",
+    "gi",
+    "khi",
+    "khong",
+    "la",
+    "mot",
+    "nao",
+    "nay",
+    "ngoai",
+    "nhu",
+    "nhung",
+    "hoac",
+    "o",
+    "pham",
+    "phai",
+    "phap",
+    "quy",
+    "ra",
+    "tai",
+    "te",
+    "the",
+    "theo",
+    "thi",
+    "trong",
+    "tu",
+    "va",
+    "ve",
+    "vi",
+    "voi",
+}
 
 
 @dataclass(frozen=True)
@@ -143,23 +218,82 @@ def _score_bm25(chunk: PreparedChunk, query_tokens: list[str]) -> float:
     return score
 
 
-def _metadata_boost(chunk: PreparedChunk, normalized_query: str) -> float:
-    raw = chunk.raw
+def _document_hint(normalized_query: str) -> str | None:
+    for document_id, aliases in DOCUMENT_ALIASES.items():
+        if any(_normalize(alias) in normalized_query for alias in aliases):
+            return document_id
+    return None
+
+
+def _chunk_matches_document(chunk: PreparedChunk, document_id: str) -> bool:
+    if chunk.raw.get("documentId") == document_id:
+        return True
     metadata = _normalize(
         " ".join(
             [
-                raw.get("documentTitle", ""),
-                raw.get("documentDescription", ""),
-                raw.get("sectionTitle", ""),
-                raw.get("fileName", ""),
+                chunk.raw.get("documentTitle", ""),
+                chunk.raw.get("fileName", ""),
             ]
         )
     )
-    boost = 0.0
-    for phrase in ["nghi dinh 98", "thong tu 05", "thong tu 19", "nghi dinh 117", "quyet dinh 7115"]:
-        if phrase in normalized_query and phrase in metadata:
-            boost += 0.35
-    return boost
+    return any(
+        _normalize(alias) in metadata for alias in DOCUMENT_ALIASES[document_id]
+    )
+
+
+def _focus_query_tokens(query: str, document_id: str | None) -> list[str]:
+    document_tokens: set[str] = set()
+    if document_id:
+        document_tokens.update(_tokenize(document_id))
+        for alias in DOCUMENT_ALIASES[document_id]:
+            document_tokens.update(_tokenize(alias))
+
+    tokens = []
+    seen = set()
+    for token in _tokenize(query):
+        if (
+            token in QUERY_STOPWORDS
+            or token in document_tokens
+            or token in seen
+        ):
+            continue
+        seen.add(token)
+        tokens.append(token)
+    return tokens
+
+
+def _overlap_ratio(query_tokens: list[str], content_tokens: list[str]) -> float:
+    if not query_tokens:
+        return 0.0
+    content_set = set(content_tokens)
+    overlap = len({token for token in query_tokens if token in content_set})
+    return overlap / len(query_tokens)
+
+
+def _ordered_overlap_ratio(
+    query_tokens: list[str], content_tokens: list[str]
+) -> float:
+    if not query_tokens:
+        return 0.0
+    content = " ".join(content_tokens)
+    for size in range(len(query_tokens), 1, -1):
+        for start in range(len(query_tokens) - size + 1):
+            phrase = " ".join(query_tokens[start : start + size])
+            if phrase in content:
+                return size / len(query_tokens)
+    return 0.0
+
+
+def _direct_overlap_scores(
+    chunk: PreparedChunk, query_tokens: list[str]
+) -> tuple[float, float, float]:
+    section_tokens = _tokenize(chunk.raw.get("sectionTitle", ""))
+    evidence_tokens = section_tokens + _tokenize(chunk.raw.get("text", ""))
+    return (
+        _overlap_ratio(query_tokens, evidence_tokens),
+        _ordered_overlap_ratio(query_tokens, evidence_tokens),
+        _overlap_ratio(query_tokens, section_tokens),
+    )
 
 
 def _excerpt(text: str, query_tokens: list[str]) -> str:
@@ -176,29 +310,80 @@ def _excerpt(text: str, query_tokens: list[str]) -> str:
 
 
 def _rank(query: str) -> list[dict[str, Any]]:
-    query_tokens = _tokenize(query)
+    normalized_query = _normalize(query)
+    document_id = _document_hint(normalized_query)
+    query_tokens = _focus_query_tokens(query, document_id)
     if not query_tokens:
         return []
 
-    normalized_query = _normalize(query)
-    scored = []
-    for chunk in INDEX.chunks:
-        score = _score_bm25(chunk, query_tokens) + _metadata_boost(chunk, normalized_query)
-        if score > 0:
-            scored.append((score, chunk))
+    candidates = INDEX.chunks
+    if document_id:
+        document_candidates = [
+            chunk
+            for chunk in INDEX.chunks
+            if _chunk_matches_document(chunk, document_id)
+        ]
+        if document_candidates:
+            candidates = document_candidates
 
-    scored.sort(key=lambda item: item[0], reverse=True)
-    return [
-        {
-            "reference_id": chunk.raw.get("id"),
-            "file_path": chunk.raw.get("fileName"),
-            "content": [_excerpt(chunk.raw.get("text", ""), query_tokens)],
-            "score": score,
-            "document_title": chunk.raw.get("documentTitle"),
-            "section_title": chunk.raw.get("sectionTitle"),
-        }
-        for score, chunk in scored[:5]
+    scored = []
+    for chunk in candidates:
+        bm25 = _score_bm25(chunk, query_tokens)
+        content_overlap, ordered_overlap, section_overlap = (
+            _direct_overlap_scores(chunk, query_tokens)
+        )
+        direct_relevance = (
+            content_overlap * 2
+            + ordered_overlap * 3
+            + section_overlap * 2
+        )
+        if bm25 <= 0 and direct_relevance <= 0:
+            continue
+        scored.append((bm25, direct_relevance, chunk))
+
+    if not scored:
+        return []
+
+    max_bm25 = max(item[0] for item in scored) or 1.0
+    reranked = [
+        (direct_relevance + (bm25 / max_bm25) * 0.35, direct_relevance, chunk)
+        for bm25, direct_relevance, chunk in scored
     ]
+    reranked.sort(key=lambda item: item[0], reverse=True)
+    best_score = reranked[0][0]
+    best_direct_relevance = max(item[1] for item in reranked)
+
+    references = []
+    seen_sections: set[tuple[str, str]] = set()
+    for score, direct_relevance, chunk in reranked:
+        if score < best_score * 0.25:
+            continue
+        if (
+            best_direct_relevance > 0
+            and direct_relevance < best_direct_relevance * 0.25
+        ):
+            continue
+        section_key = (
+            str(chunk.raw.get("documentId", "")),
+            str(chunk.raw.get("sectionTitle", "")),
+        )
+        if section_key in seen_sections:
+            continue
+        seen_sections.add(section_key)
+        references.append(
+            {
+                "reference_id": chunk.raw.get("id"),
+                "file_path": chunk.raw.get("fileName"),
+                "content": [_excerpt(chunk.raw.get("text", ""), query_tokens)],
+                "score": score,
+                "document_title": chunk.raw.get("documentTitle"),
+                "section_title": chunk.raw.get("sectionTitle"),
+            }
+        )
+        if len(references) >= MAX_REFERENCES:
+            break
+
+    return references
 
 
 def _answer(query: str, references: list[dict[str, Any]]) -> str:

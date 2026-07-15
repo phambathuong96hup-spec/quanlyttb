@@ -6,8 +6,35 @@
 import { queryLocalLegalRag } from './legalRagService.ts';
 import { formatReferencesForDisplay, type AiCitationReference } from './aiCitations.ts';
 
-const AI_BASE_URL = (import.meta.env.VITE_AI_API_URL || '').replace(/\/+$/, '');
-const AI_API_KEY = import.meta.env.VITE_AI_API_KEY || '';
+const viteEnv = import.meta.env ?? {};
+
+export const normalizeAIBaseUrl = (
+  value: unknown,
+  allowInsecureLocalhost = false,
+): string => {
+  if (typeof value !== 'string' || !value.trim()) return '';
+
+  try {
+    const url = new URL(value.trim());
+    const isLocalhost = url.hostname === 'localhost'
+      || url.hostname === '127.0.0.1'
+      || url.hostname === '[::1]';
+    const isAllowedProtocol = url.protocol === 'https:'
+      || (allowInsecureLocalhost && isLocalhost && url.protocol === 'http:');
+
+    if (!isAllowedProtocol || url.username || url.password) return '';
+
+    url.hash = '';
+    url.search = '';
+    return url.toString().replace(/\/+$/, '');
+  } catch {
+    return '';
+  }
+};
+
+const RAW_AI_BASE_URL = viteEnv.VITE_AI_API_URL || '';
+const AI_BASE_URL = normalizeAIBaseUrl(RAW_AI_BASE_URL, Boolean(viteEnv.DEV));
+const AI_API_KEY = viteEnv.VITE_AI_API_KEY || '';
 
 // ==================== Types ====================
 
@@ -62,17 +89,22 @@ const aiHeaders = (): HeadersInit => ({
 });
 
 export const getAIBackendInfo = () => {
-  let host = '';
-  try {
-    host = AI_BASE_URL ? new URL(AI_BASE_URL).host : '';
-  } catch {
-    host = AI_BASE_URL;
-  }
+  const hasConfiguredValue = Boolean(RAW_AI_BASE_URL.trim());
   return {
     baseUrl: AI_BASE_URL,
-    host,
+    host: AI_BASE_URL ? new URL(AI_BASE_URL).host : '',
     isConfigured: Boolean(AI_BASE_URL),
+    configurationStatus: AI_BASE_URL
+      ? 'ready'
+      : hasConfiguredValue ? 'invalid' : 'missing',
   };
+};
+
+const requireAIBaseUrl = () => {
+  if (!AI_BASE_URL) {
+    throw new Error('Chưa cấu hình VITE_AI_API_URL bằng URL HTTPS hợp lệ.');
+  }
+  return AI_BASE_URL;
 };
 
 const hasNoRemoteContext = (response: string) => {
@@ -175,7 +207,7 @@ export const queryAI = async (request: QueryRequest): Promise<string> => {
       const answer = await queryLocalLegalRag(request.query);
       return answer.response;
     }
-    return `${data.response}${formatReferencesForDisplay(data.references || [])}`;
+    return `${data.response}${formatReferencesForDisplay(data.references || [], request.query)}`;
   } catch {
     const answer = await queryLocalLegalRag(request.query);
     return answer.response;
@@ -286,7 +318,7 @@ export const queryAIStream = async (
       await queryLocalFallback(request.query, onChunk, onDone);
       return;
     }
-    const sources = formatReferencesForDisplay(references);
+    const sources = formatReferencesForDisplay(references, request.query);
     if (sources) onChunk(sources);
     onDone();
   } catch (err) {
@@ -313,7 +345,8 @@ export const uploadTextDocument = async (
   text: string,
   description?: string,
 ): Promise<{ status: string }> => {
-  const res = await fetch(`${AI_BASE_URL}/documents/text`, {
+  const baseUrl = requireAIBaseUrl();
+  const res = await fetch(`${baseUrl}/documents/text`, {
     method: 'POST',
     headers: aiHeaders(),
     body: JSON.stringify({ text, description }),
@@ -327,7 +360,7 @@ export const uploadTextDocument = async (
  * Upload file (PDF, DOCX, TXT) vào LightRAG knowledge base
  */
 export const uploadFileDocument = async (file: File): Promise<{ status: string }> => {
-  if (!AI_BASE_URL) throw new Error('Chưa cấu hình VITE_AI_API_URL.');
+  const baseUrl = requireAIBaseUrl();
 
   const formData = new FormData();
   formData.append('file', file);
@@ -335,7 +368,7 @@ export const uploadFileDocument = async (file: File): Promise<{ status: string }
   const headers: HeadersInit = {};
   if (AI_API_KEY) headers['X-API-Key'] = AI_API_KEY;
 
-  const res = await fetch(`${AI_BASE_URL}/documents/upload`, {
+  const res = await fetch(`${baseUrl}/documents/upload`, {
     method: 'POST',
     headers,
     body: formData,
@@ -349,7 +382,8 @@ export const uploadFileDocument = async (file: File): Promise<{ status: string }
  * Lấy danh sách tài liệu đã nạp vào knowledge base
  */
 export const fetchDocuments = async (): Promise<DocumentInfo[]> => {
-  const res = await fetch(`${AI_BASE_URL}/documents`, {
+  const baseUrl = requireAIBaseUrl();
+  const res = await fetch(`${baseUrl}/documents`, {
     headers: aiHeaders(),
   });
   if (!res.ok) throw new Error(`Fetch documents failed: ${res.status}`);
