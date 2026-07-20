@@ -11,6 +11,7 @@ import {
   Wrench,
   BotMessageSquare,
   QrCode,
+  BookOpen,
 } from 'lucide-react';
 import { useAuth } from '../../authContext';
 import './Sidebar.css';
@@ -26,6 +27,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
   const publicItems = [
     { path: '/dashboard', name: 'Tổng quan', icon: Activity, private: true },
     { path: '/devices', name: 'Quản lý thiết bị', icon: Microscope, private: true },
+    { path: '/dinh-muc', name: 'Định mức', icon: BookOpen, private: true },
   ];
 
   const privateItems = [

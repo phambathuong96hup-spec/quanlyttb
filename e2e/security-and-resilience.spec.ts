@@ -123,3 +123,33 @@ test('transfer creation keeps the device type placeholder until the user chooses
   await expect(deviceType).toHaveValue('');
   await expect(page.getByRole('button', { name: /Gửi yêu cầu/ })).toBeDisabled();
 });
+
+test('norms lookup separates departments and supports search and pagination', async ({ page }) => {
+  await seedSession(page, validSession);
+  await mockGas(page);
+
+  await page.goto('/dinh-muc');
+
+  await expect(page.getByRole('heading', { name: 'Định mức vật tư y tế', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'HOI SUC', exact: true })).toBeVisible();
+  await expect(page.locator('.norms-department-list button')).toHaveCount(18);
+
+  const search = page.getByRole('searchbox', { name: 'Tìm trong khoa/phòng đang chọn' });
+  await search.fill('bang dinh vai');
+  await expect(page.getByText('Băng dính vải', { exact: true }).first()).toBeVisible();
+  await expect(page.locator('.norms-result-announcement')).toContainText('Tìm thấy');
+
+  await search.fill('');
+  await page.getByRole('button', { name: 'Trang sau', exact: true }).click();
+  await expect(page.locator('.norms-pagination')).toContainText('Trang 2');
+
+  const ngoaiDepartment = page.locator('.norms-department-list button').filter({ hasText: 'NGOAI' });
+  await expect(ngoaiDepartment).toHaveCount(1);
+  await ngoaiDepartment.click();
+  await expect(page.getByRole('heading', { name: 'NGOAI', exact: true })).toBeVisible();
+  await expect(page.locator('.norms-pagination')).toContainText('Trang 1');
+
+  const maternityDepartment = page.locator('.norms-department-list button').filter({ hasText: 'Khoa sản' });
+  await maternityDepartment.click();
+  await expect(page.locator('.norms-data-warning')).toContainText('17');
+});

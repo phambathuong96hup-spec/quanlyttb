@@ -14,6 +14,7 @@ const DeviceDetails = lazy(() => import('./pages/DeviceProfile'));
 const Requests = lazy(() => import('./pages/Requests'));
 const TrackDevices = lazy(() => import('./pages/TrackDevices'));
 const InventoryQr = lazy(() => import('./pages/InventoryQr'));
+const NormsLookup = lazy(() => import('./pages/NormsLookup'));
 const Reports = lazy(() => import('./pages/Reports'));
 const Operations = lazy(() => import('./pages/Operations'));
 const AIAssistant = lazy(() => import('./pages/AIAssistant'));
@@ -69,6 +70,7 @@ function App() {
                   <Route path="repairs" element={<Navigate to="/requests?type=repair" replace />} />
                   <Route path="tracking" element={<PrivateRoute><TrackDevices /></PrivateRoute>} />
                   <Route path="inventory" element={<PrivateRoute><InventoryQr /></PrivateRoute>} />
+                  <Route path="dinh-muc" element={<PrivateRoute><NormsLookup /></PrivateRoute>} />
                   <Route path="operations" element={<PrivateRoute><Operations /></PrivateRoute>} />
                   <Route path="transfers" element={<Navigate to="/requests?type=transfer" replace />} />
                   <Route path="reports" element={<PrivateRoute><Reports /></PrivateRoute>} />

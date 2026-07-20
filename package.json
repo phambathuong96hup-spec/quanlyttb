@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "prebuild": "npm run build:norms",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
@@ -13,6 +14,7 @@
     "test:all": "npm test && npm run test:e2e",
     "test:insights": "node --test tests/operationalInsights.test.ts",
     "import:snapshot": "node scripts/importSnapshotToGas.mjs",
+    "build:norms": "node scripts/buildNormsIndex.mjs",
     "build:rag": "node scripts/buildLegalRagIndex.mjs"
   },
   "dependencies": {
