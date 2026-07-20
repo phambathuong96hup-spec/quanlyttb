@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import mammoth from 'mammoth';
@@ -10,6 +10,8 @@ const outputFile = path.join(outputDir, 'legal-knowledge.json');
 
 const sourceDir = process.env.DOCX_SOURCE_DIR
   || path.join(process.env.USERPROFILE || process.env.HOME || '', 'Downloads');
+const referenceSourceDir = process.env.RAG_REFERENCE_SOURCE_DIR
+  || path.join(projectRoot, 'rag-sources');
 
 const documents = [
   {
@@ -41,6 +43,14 @@ const documents = [
     fileName: '7115_QD-BYT_332675.docx',
     title: 'Quyết định 7115/QĐ-BYT',
     description: 'Ban hành quy trình thanh tra trang thiết bị y tế.',
+  },
+  {
+    id: 'dinh-muc-vat-tu-2026',
+    fileName: 'ĐỊNH MỨC 2026 10.7.26.xlsx',
+    textFileName: 'dinh-muc-2026.txt',
+    rowScopedSections: true,
+    title: 'Định mức vật tư y tế tiêu hao năm 2026',
+    description: 'Định mức vật tư, hóa chất và chi phí theo 18 khoa/phòng của TTYT khu vực Thanh Ba năm 2026.',
   },
 ];
 
@@ -106,13 +116,19 @@ const chunkDocument = (document, text) => {
   const flush = () => {
     if (current.length === 0) return;
     const body = current.join('\n');
+    const rowNumbers = document.rowScopedSections
+      ? [...body.matchAll(/^Hàng (\d+)/gm)].map((match) => Number(match[1]))
+      : [];
+    const sectionTitle = rowNumbers.length > 0
+      ? `${currentSection} · Hàng ${rowNumbers[0]}-${rowNumbers[rowNumbers.length - 1]}`
+      : currentSection;
     chunks.push({
       id: `${document.id}-${String(chunks.length + 1).padStart(4, '0')}`,
       documentId: document.id,
       documentTitle: document.title,
       documentDescription: document.description,
       fileName: document.fileName,
-      sectionTitle: currentSection,
+      sectionTitle,
       chunkIndex: chunks.length,
       text: body,
       tokenEstimate: estimateTokens(body),
@@ -140,10 +156,14 @@ const chunkDocument = (document, text) => {
   return chunks;
 };
 
-const readDocx = async (document) => {
-  const filePath = path.join(sourceDir, document.fileName);
-  const result = await mammoth.extractRawText({ path: filePath });
-  const text = cleanText(result.value);
+const readSourceDocument = async (document) => {
+  const filePath = document.textFileName
+    ? path.join(referenceSourceDir, document.textFileName)
+    : path.join(sourceDir, document.fileName);
+  const extractedText = document.textFileName
+    ? await readFile(filePath, 'utf8')
+    : (await mammoth.extractRawText({ path: filePath })).value;
+  const text = cleanText(extractedText);
   if (!text) {
     throw new Error(`No text extracted from ${filePath}`);
   }
@@ -155,7 +175,7 @@ const main = async () => {
   const chunks = [];
 
   for (const document of documents) {
-    const extractedDoc = await readDocx(document);
+    const extractedDoc = await readSourceDocument(document);
     extracted.push({
       id: extractedDoc.id,
       title: extractedDoc.title,
@@ -167,9 +187,9 @@ const main = async () => {
   }
 
   const index = {
-    version: 1,
+    version: 2,
     generatedAt: new Date().toISOString(),
-    source: 'Bộ 5 văn bản pháp quy về quản lý trang thiết bị y tế',
+    source: 'Bộ văn bản pháp quy về trang thiết bị y tế và dữ liệu định mức vật tư năm 2026',
     documents: extracted,
     chunks,
   };

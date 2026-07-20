@@ -1,6 +1,6 @@
-"""Legal RAG API for the equipment-management assistant.
+"""Knowledge RAG API for the equipment-management assistant.
 
-The backend retrieves relevant legal snippets from a prebuilt index, then asks an
+The backend retrieves relevant internal-document snippets from a prebuilt index, then asks an
 OpenAI-compatible LLM to synthesize the final answer when a provider key is
 configured. If the LLM provider is unavailable, it falls back to deterministic
 retrieval so the public AI endpoints remain usable.
@@ -73,6 +73,13 @@ DOCUMENT_ALIASES = {
         "7115/qd",
         "7115 qd",
         "qd 7115",
+    ),
+    "dinh-muc-vat-tu-2026": (
+        "dinh muc 2026",
+        "dinh muc vat tu 2026",
+        "dinh muc vat tu",
+        "dinh muc hoa chat 2026",
+        "10.7.26",
     ),
 }
 QUERY_STOPWORDS = {
@@ -390,7 +397,7 @@ def _answer(query: str, references: list[dict[str, Any]]) -> str:
     if not references:
         return (
             "### Tóm tắt\n"
-            "Chưa tìm thấy đoạn phù hợp trong bộ 5 văn bản pháp quy đã nạp.\n\n"
+            "Chưa tìm thấy đoạn phù hợp trong chỉ mục nội bộ đã nạp.\n\n"
             "### Việc cần làm\n"
             "- Hỏi cụ thể hơn theo số văn bản, điều khoản hoặc từ khóa nghiệp vụ.\n"
             "- Kiểm tra lại tên thiết bị, loại hồ sơ hoặc quy trình cần tra cứu.\n\n"
@@ -400,7 +407,7 @@ def _answer(query: str, references: list[dict[str, Any]]) -> str:
 
     lines = [
         "### Tóm tắt",
-        "Các đoạn liên quan nhất trong chỉ mục pháp quy nội bộ được liệt kê dưới đây.",
+        "Các đoạn liên quan nhất trong chỉ mục nội bộ được liệt kê dưới đây.",
         "",
         "### Căn cứ trong tài liệu",
     ]
@@ -414,11 +421,11 @@ def _answer(query: str, references: list[dict[str, Any]]) -> str:
         [
             "",
             "### Việc cần làm",
-            "- Đối chiếu nguyên văn văn bản được trích dẫn trước khi áp dụng.",
-            "- Nếu cần quyết định chính thức, ghi lại số văn bản và mục được dùng làm căn cứ.",
+            "- Đối chiếu nguyên văn tài liệu được trích dẫn trước khi áp dụng.",
+            "- Nếu cần quyết định chính thức, ghi lại tên tài liệu và mục được dùng làm căn cứ.",
             "",
             "### Lưu ý",
-            "- Đây là tổng hợp theo chỉ mục nội bộ, không thay thế ý kiến pháp chế.",
+            "- Đây là tổng hợp theo chỉ mục nội bộ, không thay thế quyết định chuyên môn, kỹ thuật hoặc ý kiến pháp chế.",
         ]
     )
     return "\n".join(lines).strip()
@@ -458,14 +465,14 @@ def _ensure_answer_sections(answer: str, references: list[dict[str, Any]]) -> st
         chunks.append(
             "### Việc cần làm\n"
             "- Đối chiếu nguyên văn các nguồn tham chiếu trước khi áp dụng.\n"
-            "- Ghi lại số văn bản, mục hoặc hồ sơ liên quan trong biên bản xử lý.\n"
-            "- Nếu câu hỏi cần quyết định chính thức, chuyển nội dung cho bộ phận phụ trách pháp chế hoặc quản lý chất lượng."
+            "- Ghi lại tên tài liệu, mục hoặc hồ sơ liên quan trong biên bản xử lý.\n"
+            "- Nếu câu hỏi cần quyết định chính thức, chuyển nội dung cho bộ phận chuyên môn phụ trách."
         )
 
     if not has_section["### Lưu ý"]:
         chunks.append(
             "### Lưu ý\n"
-            "- Câu trả lời được tổng hợp từ chỉ mục nội bộ và không thay thế văn bản gốc.\n"
+            "- Câu trả lời được tổng hợp từ chỉ mục nội bộ và không thay thế tài liệu gốc.\n"
             "- Nếu nguồn chưa đủ rõ, cần bổ sung tài liệu hoặc hỏi cụ thể hơn."
         )
 
@@ -558,7 +565,7 @@ def _llm_prompt(query: str, references: list[dict[str, Any]]) -> list[dict[str, 
                 "Bố cục bắt buộc gồm các tiêu đề markdown đúng thứ tự: "
                 "### Tóm tắt, ### Căn cứ trong tài liệu, ### Việc cần làm, ### Lưu ý. "
                 "Dùng bullet cho từng ý, in đậm thuật ngữ/văn bản quan trọng, và nêu mã nguồn tham chiếu dạng [1], [2] khi phù hợp. "
-                "Không bịa điều khoản, số văn bản hoặc kết luận pháp lý ngoài nguồn."
+                "Không bịa số liệu định mức, điều khoản, số văn bản hoặc kết luận ngoài nguồn."
             ),
         },
         {
@@ -651,7 +658,7 @@ async def _generate_answer(query: str, references: list[dict[str, Any]]) -> dict
     }
 
 
-app = FastAPI(title="Equipment Legal RAG API", version="legal-rag-llm")
+app = FastAPI(title="Equipment Knowledge RAG API", version="knowledge-rag-llm")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -1500,17 +1507,17 @@ async def root():
                     <div class="welcome" id="welcome">
                       <div class="welcome-icon" aria-hidden="true">▦</div>
                       <h1>TBDeviceCare-AI Pro</h1>
-                      <p>Trợ lý tra cứu pháp quy trang thiết bị y tế.</p>
+                      <p>Trợ lý tra cứu pháp quy và định mức vật tư y tế.</p>
                     </div>
                   </div>
 
                   <form id="question-form">
                     <label for="question">Câu hỏi</label>
                     <div class="composer">
-                      <textarea id="question" name="question" required placeholder="Nhập câu hỏi về nghị định, thông tư, hồ sơ quản lý..."></textarea>
+                      <textarea id="question" name="question" required placeholder="Nhập câu hỏi về nghị định, thông tư, định mức vật tư, hồ sơ quản lý..."></textarea>
                       <button id="submit" type="submit" aria-label="Gửi câu hỏi">Gửi câu hỏi</button>
                     </div>
-                    <div class="disclaimer">AI có thể mắc lỗi. Luôn đối chiếu văn bản pháp quy chính thức.</div>
+                    <div class="disclaimer">AI có thể mắc lỗi. Luôn đối chiếu tài liệu gốc trước khi áp dụng.</div>
                   </form>
                 </section>
               </div>
@@ -1849,7 +1856,7 @@ async def health():
         "core_version": "legal-rag-llm",
         "api_version": "legal-rag-llm",
         "webui_title": "TBDeviceCare-AI",
-        "webui_description": "Legal RAG with LLM synthesis and retrieval fallback",
+        "webui_description": "Internal knowledge RAG with LLM synthesis and retrieval fallback",
     }
 
 
@@ -1931,7 +1938,7 @@ async def query_stream(request: dict[str, Any]):
 async def upload_document(request: Request):
     raise HTTPException(
         status_code=501,
-        detail="Read-only legal RAG is already indexed; upload is disabled.",
+        detail="Read-only knowledge RAG is already indexed; upload is disabled.",
     )
 
 

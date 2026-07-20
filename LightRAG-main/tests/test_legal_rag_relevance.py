@@ -50,3 +50,29 @@ def test_nghi_dinh_98_query_prefers_directly_overlapping_citations():
 
 def test_out_of_scope_query_returns_safe_empty_evidence():
     assert SERVER._rank("quasar zyxwv blockchain ngoài phạm vi pháp quy") == []
+
+
+def test_2026_norms_query_is_scoped_to_the_workbook():
+    query = "Định mức 2026 bơm 50 ml bơm hóa chất tại khoa hồi sức"
+
+    assert SERVER._document_hint(SERVER._normalize(query)) == "dinh-muc-vat-tu-2026"
+    references = SERVER._rank(query)
+
+    assert references
+    assert all(
+        reference["file_path"] == "ĐỊNH MỨC 2026 10.7.26.xlsx"
+        for reference in references
+    )
+
+
+def test_empty_answer_describes_the_current_internal_index():
+    answer = SERVER._answer("câu hỏi ngoài chỉ mục", [])
+
+    assert "bộ 5 văn bản" not in answer
+    assert "chỉ mục nội bộ" in answer
+
+
+def test_llm_prompt_prohibits_invented_norm_values():
+    system_prompt = SERVER._llm_prompt("định mức vật tư", [])[0]["content"]
+
+    assert "số liệu định mức" in system_prompt

@@ -63,6 +63,8 @@ test('Space can run the read-only legal RAG backend without paid inference credi
   assert.match(server, /id="question-form"/);
   assert.match(server, /fetch\('\/query'/);
   assert.match(server, /TBDeviceCare-AI/);
+  assert.match(server, /Trợ lý tra cứu pháp quy và định mức vật tư y tế/);
+  assert.match(server, /nghị định, thông tư, định mức vật tư/);
   assert.match(server, /id="toggle-status"/);
   assert.match(server, /id="open-library"/);
   assert.match(server, /library-drawer/);
