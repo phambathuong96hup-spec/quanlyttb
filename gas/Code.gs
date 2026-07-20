@@ -151,10 +151,14 @@ const LOGIN_MAX_ATTEMPTS = 5;
 const LOGIN_WINDOW_SECONDS = 15 * 60;
 
 function doGet(e) {
-  if (e.parameter.action === 'login') {
+  const parameters = e && e.parameter ? e.parameter : {};
+  if (!parameters.action) {
+    return json_({ success: true, message: 'Web app quản lý trang thiết bị đang hoạt động.' });
+  }
+  if (parameters.action === 'login') {
     return json_({ success: false, message: 'Đăng nhập phải dùng POST để không lộ mã PIN trên URL.' });
   }
-  return json_(route_(e.parameter.action, e.parameter));
+  return json_(route_(parameters.action, parameters));
 }
 
 function doPost(e) {

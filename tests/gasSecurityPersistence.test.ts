@@ -48,6 +48,17 @@ const loadGas = (overrides: { sessionSecret?: string; pinPepper?: string } = {})
   return context;
 };
 
+test('doGet tolerates manual Apps Script execution without an event object', () => {
+  const gas = loadGas();
+  gas.json_ = (value: unknown) => value;
+  gas.setupSheets = () => { throw new Error('manual health check must not touch sheets'); };
+
+  const result = gas.doGet();
+
+  assert.equal(result.success, true);
+  assert.match(result.message, /Web app/i);
+});
+
 test('getDevices and getDepartments reject requests without an authenticated session', () => {
   const gas = loadGas();
   gas.setupSheets = () => undefined;

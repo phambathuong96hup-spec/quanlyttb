@@ -5,7 +5,7 @@ import { isArchivedDocumentStatus } from '../utils/documentWorkflow.ts';
 import { unwrapAppsScriptReadResponse } from './apiEnvelope.ts';
 
 // WARNING: Hardcoding the GAS URL/key here is a security risk. In production, always use env variables.
-const DEFAULT_GOOGLE_SHEETS_API_URL = 'https://script.google.com/macros/s/AKfycbzSKzwvDvK_5eL83ZEqZpouG9HWaJEd6zIIkQxiR6ouozcjSPhfgIy9cbFbeYasgPE_Jg/exec';
+const DEFAULT_GOOGLE_SHEETS_API_URL = 'https://script.google.com/macros/s/AKfycbzohWgpRv9sfiIwEd6zpuIinbkH_kTPibZBbE1iZS6lHB4womXVm2lUn39yDS51RF_4Pg/exec';
 
 const ENV = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {};
 export const GOOGLE_SHEETS_API_URL = ENV.VITE_THIET_BI_API_URL || DEFAULT_GOOGLE_SHEETS_API_URL;
