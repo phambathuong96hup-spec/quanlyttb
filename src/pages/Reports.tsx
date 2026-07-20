@@ -18,6 +18,7 @@ import { useRepairs } from '../hooks/useRepairs';
 import type { DeviceData, DeviceDocument } from '../services/api';
 import { exportCsv, type CsvRow } from '../utils/exportCsv';
 import { daysUntil, parseFlexibleDate } from '../utils/dateUtils';
+import { isArchivedDocumentStatus } from '../utils/documentWorkflow';
 import { removeVietnameseTones } from '../utils/stringUtils';
 import { getRepairStatusVariant, isRepairActive, isRepairCompleted } from '../utils/statusUtils';
 import jsPDF from 'jspdf';
@@ -222,7 +223,7 @@ const Reports: React.FC = () => {
 
   const inspectionRows = useMemo(() => {
     return devices.flatMap((device, deviceIndex) => {
-      const docs = device.documents || [];
+      const docs = (device.documents || []).filter(doc => !isArchivedDocumentStatus(doc.status));
       if (docs.length === 0) {
         const legacyRow = buildLegacyInspectionRow(device, deviceIndex);
         return legacyRow ? [legacyRow] : [];

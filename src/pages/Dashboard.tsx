@@ -6,12 +6,13 @@ import {
   Download,
   ShieldAlert,
   Wrench,
-  CalendarX2
+  CalendarX2,
+  BookOpen,
 } from 'lucide-react';
 import { Pie, Bar } from 'react-chartjs-2';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Card, CardHeader, CardBody, Badge, Table, TableHead, TableBody, TableRow, TableHeader, TableCell, Button } from '../components/ui';
-import { updateDocumentStatus } from '../services/api';
+import { markDocumentSent } from '../services/api';
 import { useDevices } from '../hooks/useDevices';
 import { useRepairs } from '../hooks/useRepairs';
 import { useAuth } from '../authContext';
@@ -19,6 +20,7 @@ import { parseVietnameseDate } from '../utils/dateUtils';
 import { buildDashboardDeviceSummary } from '../utils/dashboardDeviceStats';
 import { buildRepairStatsByMonth } from '../utils/dashboardStats';
 import { removeVietnameseTones } from '../utils/stringUtils';
+import { isArchivedDocumentStatus } from '../utils/documentWorkflow';
 import {
   getRepairStatusVariant,
   isRepairActive,
@@ -72,7 +74,7 @@ const Dashboard: React.FC = () => {
     let urgentDocType = '';
 
     // Quét tất cả tài liệu, tìm tài liệu khẩn cấp nhất
-    const docs = d.documents || [];
+    const docs = (d.documents || []).filter(doc => !isArchivedDocumentStatus(doc.status));
     if (docs.length > 0) {
       let bestDeadline: Date | null = null;
       let bestPrepDays = 45;
@@ -172,7 +174,9 @@ const Dashboard: React.FC = () => {
       return;
     }
     setUpdatingId(serial);
-    const res = await updateDocumentStatus(serial, 'Đã gửi', docType);
+    const now = new Date();
+    const sentDate = `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()}`;
+    const res = await markDocumentSent(serial, docType || '', sentDate);
     if (res && res.success) {
       mutateDevices(devices.map(d => {
         if (d.id !== serial) return d;
@@ -180,7 +184,9 @@ const Dashboard: React.FC = () => {
           ...d,
           'Trạng thái Hồ sơ': 'Đã gửi',
           documents: d.documents?.map(doc =>
-            !docType || doc.docType === docType ? { ...doc, status: 'Đã gửi' } : doc
+            (!docType || doc.docType === docType) && !isArchivedDocumentStatus(doc.status)
+              ? { ...doc, status: 'Đã gửi', sentDate }
+              : doc
           ),
         };
       }));
@@ -285,6 +291,10 @@ const Dashboard: React.FC = () => {
           <span className="dashboard-update-chip">
             Cập nhật {new Date().toLocaleTimeString('vi-VN')}, {new Date().toLocaleDateString('vi-VN')}
           </span>
+          <Link to="/dinh-muc" className="btn btn-primary btn-md">
+            <span className="btn-icon" aria-hidden="true"><BookOpen size={18} /></span>
+            Tra cứu định mức 2026
+          </Link>
           <Button variant="secondary" icon={<Download size={18} />} onClick={handleExportPDF}>Xuất báo cáo PDF</Button>
         </div>
       </div>

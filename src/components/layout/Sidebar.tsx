@@ -27,7 +27,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
   const publicItems = [
     { path: '/dashboard', name: 'Tổng quan', icon: Activity, private: true },
     { path: '/devices', name: 'Quản lý thiết bị', icon: Microscope, private: true },
-    { path: '/dinh-muc', name: 'Định mức', icon: BookOpen, private: true },
+    { path: '/dinh-muc', name: 'Tra cứu định mức 2026', icon: BookOpen, private: true },
   ];
 
   const privateItems = [

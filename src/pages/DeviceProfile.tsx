@@ -1,14 +1,15 @@
 import React, { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, AlertTriangle, RefreshCw, FileText, X, Save, Plus, Eye, Edit } from 'lucide-react';
+import { ArrowLeft, AlertTriangle, RefreshCw, FileText, X, Save, Plus, Eye, Edit, Send, CalendarPlus } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { Card, CardBody, Button, Badge, type BadgeVariant, Tabs, Table, TableHead, TableBody, TableRow, TableHeader, TableCell, Modal, FileUploader } from '../components/ui';
-import { createTransfer, addDocument, type DeviceDocument } from '../services/api';
+import { createTransfer, addDocument, markDocumentSent, renewDocument, type DeviceDocument } from '../services/api';
 import { useDevices } from '../hooks/useDevices';
 import { useTransfers } from '../hooks/useTransfers';
 import { useRepairs } from '../hooks/useRepairs';
 import { useAuth } from '../authContext';
 import { resolveDeviceListStatus } from '../utils/deviceStatus';
+import { isArchivedDocumentStatus, isRegistrationDocumentType } from '../utils/documentWorkflow';
 import { stripEvidenceLinks } from '../utils/evidenceUtils';
 import { EvidenceLinks } from '../components/EvidenceLinks';
 import './Devices.css';
@@ -16,7 +17,7 @@ import './Devices.css';
 const DeviceProfile: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { isAuthenticated, username, isAdmin } = useAuth();
+  const { isAuthenticated, username } = useAuth();
   const {
     devices,
     isLoading: isDevicesLoading,
@@ -46,22 +47,26 @@ const DeviceProfile: React.FC = () => {
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [newDept, setNewDept] = useState('');
   const [transferNote, setTransferNote] = useState('');
+  const [activeProfileTab, setActiveProfileTab] = useState('general');
 
   // State quản lý tài liệu
   const [showDocModal, setShowDocModal] = useState(false);
-  const [docModalMode, setDocModalMode] = useState<'add' | 'edit'>('add');
+  const [docModalMode, setDocModalMode] = useState<'add' | 'edit' | 'renew'>('add');
   const [isUploading, setIsUploading] = useState(false);
+  const [updatingDocumentId, setUpdatingDocumentId] = useState<string | null>(null);
   
   // File upload
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   
   // Form tài liệu
+  const [documentId, setDocumentId] = useState('');
   const [docType, setDocType] = useState('');
   const [licenseNo, setLicenseNo] = useState('');
   const [issuedDate, setIssuedDate] = useState('');
   const [expiryDate, setExpiryDate] = useState('');
   const [prepTime, setPrepTime] = useState('');
   const [docStatus, setDocStatus] = useState('Chưa gửi');
+  const [sentDate, setSentDate] = useState('');
   const [responsible, setResponsible] = useState('');
   const [collaborator, setCollaborator] = useState('');
   const [deptManager, setDeptManager] = useState('');
@@ -242,6 +247,14 @@ const DeviceProfile: React.FC = () => {
     return dateStr;
   };
 
+  const getTodayInputDate = () => {
+    const today = new Date();
+    const year = today.getFullYear();
+    const month = String(today.getMonth() + 1).padStart(2, '0');
+    const day = String(today.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
   // Helper chuyển đổi file sang Base64
   const fileToBase64 = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
@@ -256,11 +269,12 @@ const DeviceProfile: React.FC = () => {
     });
   };
 
-  // Mở modal thêm/sửa tài liệu
-  const handleOpenDocModal = (mode: 'add' | 'edit', doc?: DeviceDocument) => {
+  // Mở modal thêm/sửa/gia hạn tài liệu
+  const handleOpenDocModal = (mode: 'add' | 'edit' | 'renew', doc?: DeviceDocument) => {
     setDocModalMode(mode);
     setSelectedFile(null);
-    
+    setDocumentId(doc?.documentId || '');
+
     if (mode === 'edit' && doc) {
       setDocType(doc.docType || '');
       setLicenseNo(doc.licenseNo || '');
@@ -268,16 +282,30 @@ const DeviceProfile: React.FC = () => {
       setExpiryDate(formatDateToYYYYMMDD(doc.expiryDate || ''));
       setPrepTime(doc.prepTime || '');
       setDocStatus(doc.status || 'Chưa gửi');
+      setSentDate(formatDateToYYYYMMDD(doc.sentDate || ''));
+      setResponsible(doc.responsible || '');
+      setCollaborator(doc.collaborator || '');
+      setDeptManager(doc.deptManager || '');
+    } else if (mode === 'renew' && doc) {
+      setDocType(doc.docType || 'Đăng kiểm');
+      setLicenseNo('');
+      setIssuedDate(getTodayInputDate());
+      setExpiryDate('');
+      setPrepTime(doc.prepTime || '');
+      setDocStatus('Đã phê duyệt');
+      setSentDate(formatDateToYYYYMMDD(doc.sentDate || ''));
       setResponsible(doc.responsible || '');
       setCollaborator(doc.collaborator || '');
       setDeptManager(doc.deptManager || '');
     } else {
+      setDocumentId('');
       setDocType('');
       setLicenseNo('');
       setIssuedDate('');
       setExpiryDate('');
       setPrepTime('');
       setDocStatus('Chưa gửi');
+      setSentDate('');
       setResponsible('');
       setCollaborator('');
       setDeptManager('');
@@ -291,6 +319,23 @@ const DeviceProfile: React.FC = () => {
     if (!device) return;
     if (!docType.trim()) {
       alert('Vui lòng chọn hoặc nhập Loại tài liệu.');
+      return;
+    }
+    if (docModalMode === 'add') {
+      const duplicateActiveDocument = (device.documents || []).find(doc => (
+        !isArchivedDocumentStatus(doc.status)
+        && doc.docType.trim().localeCompare(docType.trim(), 'vi', { sensitivity: 'base' }) === 0
+      ));
+      if (duplicateActiveDocument) {
+        const suggestedAction = isRegistrationDocumentType(duplicateActiveDocument.docType)
+          ? '“Gia hạn đăng kiểm” hoặc “Sửa”'
+          : '“Sửa”';
+        alert(`Loại tài liệu này đã tồn tại. Vui lòng dùng nút ${suggestedAction} trên hồ sơ hiện tại.`);
+        return;
+      }
+    }
+    if (docModalMode === 'renew' && !expiryDate) {
+      alert('Vui lòng nhập hạn đăng kiểm mới.');
       return;
     }
 
@@ -311,21 +356,26 @@ const DeviceProfile: React.FC = () => {
         mimeType = selectedFile.type;
       }
 
-      const res = await addDocument({
+      const documentPayload = {
         serial: device.id,
+        documentId: docModalMode === 'add' ? undefined : documentId || undefined,
         docType: docType.trim(),
         licenseNo: licenseNo.trim(),
         issuedDate: formatDateToDDMMYYYY(issuedDate),
         expiryDate: formatDateToDDMMYYYY(expiryDate),
         prepTime: prepTime.trim(),
         status: docStatus,
+        sentDate: formatDateToDDMMYYYY(sentDate),
         responsible: responsible.trim(),
         collaborator: collaborator.trim(),
         deptManager: deptManager.trim(),
         fileContent,
         fileName,
         mimeType,
-      });
+      };
+      const res = docModalMode === 'renew'
+        ? await renewDocument({ ...documentPayload, expiryDate: documentPayload.expiryDate })
+        : await addDocument(documentPayload);
 
       alert((res.success ? '✅ ' : '❌ ') + (res.message || 'Có lỗi xảy ra.'));
       if (res.success) {
@@ -341,11 +391,36 @@ const DeviceProfile: React.FC = () => {
     }
   };
 
+  const handleMarkDocumentSent = async (doc: DeviceDocument) => {
+    if (!device) return;
+    const updateKey = doc.documentId || `${device.id}-${doc.docType}`;
+    const today = formatDateToDDMMYYYY(getTodayInputDate());
+    setUpdatingDocumentId(updateKey);
+    try {
+      const res = await markDocumentSent(device.id, doc.docType, today, doc.documentId);
+      alert((res.success ? '✅ ' : '❌ ') + (res.message || 'Có lỗi xảy ra.'));
+      if (res.success) await refetchDevices();
+    } catch (err) {
+      console.error(err);
+      alert('❌ Không thể cập nhật trạng thái gửi đăng kiểm.');
+    } finally {
+      setUpdatingDocumentId(null);
+    }
+  };
+
   const documentsTab = (() => {
-    const docs = device?.documents || [];
+    const docs = [...(device?.documents || [])].sort((a, b) => (
+      Number(isArchivedDocumentStatus(a.status)) - Number(isArchivedDocumentStatus(b.status))
+    ));
+    const currentRegistrationDoc = docs.find(doc => (
+      !isArchivedDocumentStatus(doc.status) && isRegistrationDocumentType(doc.docType)
+    ));
+    const currentRegistrationKey = currentRegistrationDoc
+      ? currentRegistrationDoc.documentId || `${device?.id || ''}-${currentRegistrationDoc.docType}`
+      : '';
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-        {isAdmin && (
+        {isAuthenticated && (
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
             <Button
               variant="primary"
@@ -356,6 +431,47 @@ const DeviceProfile: React.FC = () => {
               Thêm tài liệu mới
             </Button>
           </div>
+        )}
+
+        {currentRegistrationDoc && (
+          <section className="registration-status-panel" aria-label="Trạng thái gửi đăng kiểm hiện tại" aria-live="polite">
+            <div className="registration-status-copy">
+              <span className="registration-status-eyebrow">Hồ sơ đăng kiểm hiện tại</span>
+              <div className="registration-status-title-row">
+                <strong>{currentRegistrationDoc.status || 'Chưa gửi'}</strong>
+                <Badge variant={currentRegistrationDoc.status === 'Đã gửi' || currentRegistrationDoc.status === 'Đã phê duyệt' ? 'success' : currentRegistrationDoc.status === 'Đang xử lý' ? 'warning' : 'neutral'}>
+                  {currentRegistrationDoc.docType}
+                </Badge>
+              </div>
+              <span>
+                Ngày gửi: <strong>{currentRegistrationDoc.sentDate || 'Chưa ghi nhận'}</strong>
+                {' · '}Hạn hiện tại: <strong>{currentRegistrationDoc.expiryDate || 'Chưa có'}</strong>
+              </span>
+            </div>
+            {isAuthenticated && (
+              <div className="registration-status-actions">
+                {currentRegistrationDoc.status !== 'Đã gửi' && currentRegistrationDoc.status !== 'Đang xử lý' && currentRegistrationDoc.status !== 'Đã phê duyệt' && (
+                  <Button
+                    variant="success"
+                    size="sm"
+                    icon={<Send size={14} />}
+                    disabled={updatingDocumentId === currentRegistrationKey}
+                    onClick={() => void handleMarkDocumentSent(currentRegistrationDoc)}
+                  >
+                    {updatingDocumentId === currentRegistrationKey ? 'Đang lưu...' : 'Đánh dấu đã gửi'}
+                  </Button>
+                )}
+                <Button
+                  variant="primary"
+                  size="sm"
+                  icon={<CalendarPlus size={14} />}
+                  onClick={() => handleOpenDocModal('renew', currentRegistrationDoc)}
+                >
+                  Gia hạn đăng kiểm
+                </Button>
+              </div>
+            )}
+          </section>
         )}
         
         {docs.length === 0 ? (
@@ -373,14 +489,18 @@ const DeviceProfile: React.FC = () => {
                 <TableHeader>Hạn hiệu lực</TableHeader>
                 <TableHeader>Thời gian chuẩn bị</TableHeader>
                 <TableHeader>Trạng thái</TableHeader>
+                <TableHeader>Ngày gửi đăng kiểm</TableHeader>
                 <TableHeader>Người chịu TN</TableHeader>
                 <TableHeader>File đính kèm</TableHeader>
-                {isAdmin && <TableHeader style={{ textAlign: 'right' }}>Thao tác</TableHeader>}
+                {isAuthenticated && <TableHeader style={{ textAlign: 'right' }}>Thao tác</TableHeader>}
               </TableRow>
             </TableHead>
             <TableBody>
               {docs.map((doc, idx) => {
                 const days = doc.daysUntilExpiry;
+                const archived = isArchivedDocumentStatus(doc.status);
+                const registrationDocument = isRegistrationDocumentType(doc.docType);
+                const updateKey = doc.documentId || `${device?.id || ''}-${doc.docType}`;
                 let badgeVariant: BadgeVariant = 'neutral';
                 let daysText = '';
                 if (days !== null) {
@@ -390,7 +510,7 @@ const DeviceProfile: React.FC = () => {
                   else { badgeVariant = 'success'; daysText = `Còn ${days} ngày`; }
                 }
                 return (
-                  <TableRow key={idx}>
+                  <TableRow key={doc.documentId || `${doc.docType}-${idx}`}>
                     <TableCell><strong>{doc.docType || '—'}</strong></TableCell>
                     <TableCell>{doc.licenseNo || '—'}</TableCell>
                     <TableCell>{doc.issuedDate || '—'}</TableCell>
@@ -403,6 +523,13 @@ const DeviceProfile: React.FC = () => {
                       <Badge variant={doc.status === 'Đã gửi' || doc.status === 'Đã phê duyệt' ? 'success' : doc.status === 'Đang xử lý' ? 'warning' : 'neutral'}>
                         {doc.status || 'Chưa gửi'}
                       </Badge>
+                    </TableCell>
+                    <TableCell>
+                      {doc.sentDate ? (
+                        <span style={{ whiteSpace: 'nowrap', fontWeight: 650 }}>{doc.sentDate}</span>
+                      ) : (
+                        <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Chưa ghi nhận</span>
+                      )}
                     </TableCell>
                     <TableCell>{doc.responsible || '—'}</TableCell>
                     <TableCell>
@@ -421,18 +548,40 @@ const DeviceProfile: React.FC = () => {
                         <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Không có file</span>
                       )}
                     </TableCell>
-                    {isAdmin && (
+                    {isAuthenticated && (
                       <TableCell style={{ textAlign: 'right' }}>
-                        <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            style={{ padding: '4px 8px', minHeight: 'auto', height: '28px', fontSize: '0.8rem' }}
-                            icon={<Edit size={12} />}
-                            onClick={() => handleOpenDocModal('edit', doc)}
-                          >
-                            Sửa
-                          </Button>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', justifyContent: 'flex-end' }}>
+                          {!archived && registrationDocument && doc.status !== 'Đã gửi' && doc.status !== 'Đang xử lý' && doc.status !== 'Đã phê duyệt' && (
+                            <Button
+                              variant="success"
+                              size="sm"
+                              icon={<Send size={12} />}
+                              disabled={updatingDocumentId === updateKey}
+                              onClick={() => void handleMarkDocumentSent(doc)}
+                            >
+                              {updatingDocumentId === updateKey ? 'Đang lưu...' : 'Đánh dấu đã gửi'}
+                            </Button>
+                          )}
+                          {!archived && registrationDocument && (
+                            <Button
+                              variant="primary"
+                              size="sm"
+                              icon={<CalendarPlus size={12} />}
+                              onClick={() => handleOpenDocModal('renew', doc)}
+                            >
+                              Gia hạn đăng kiểm
+                            </Button>
+                          )}
+                          {!archived && (
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              icon={<Edit size={12} />}
+                              onClick={() => handleOpenDocModal('edit', doc)}
+                            >
+                              Sửa
+                            </Button>
+                          )}
                         </div>
                       </TableCell>
                     )}
@@ -504,7 +653,12 @@ const DeviceProfile: React.FC = () => {
               </div>
 
               <div style={{ marginTop: '32px' }}>
-                <Tabs tabs={tabsData} defaultTab="general" />
+                <Tabs
+                  tabs={tabsData}
+                  defaultTab="general"
+                  activeTab={activeProfileTab}
+                  onTabChange={setActiveProfileTab}
+                />
               </div>
             </>
           )}
@@ -549,24 +703,38 @@ const DeviceProfile: React.FC = () => {
         <Modal
           isOpen={showDocModal}
           onClose={() => setShowDocModal(false)}
-          title={docModalMode === 'add' ? '📄 Thêm tài liệu kiểm định mới' : '📝 Sửa thông tin tài liệu'}
+          title={docModalMode === 'add'
+            ? '📄 Thêm tài liệu kiểm định mới'
+            : docModalMode === 'renew'
+              ? '📅 Gia hạn đăng kiểm'
+              : '📝 Sửa thông tin tài liệu'}
           size="lg"
         >
           <form onSubmit={handleSubmitDoc}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
+            {docModalMode === 'renew' && (
+              <div
+                role="note"
+                style={{ marginBottom: '16px', padding: '12px 14px', border: '1px solid #99f6e4', borderRadius: '8px', background: '#f0fdfa', color: '#115e59', lineHeight: 1.5 }}
+              >
+                Nhập số đăng kiểm và hạn mới. Hồ sơ hiện tại sẽ được giữ lại trong lịch sử với trạng thái “Đã gia hạn”.
+              </div>
+            )}
+            <div className="document-form-grid">
               <div>
-                <label style={{ display: 'block', fontWeight: '600', marginBottom: '6px', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Loại tài liệu *</label>
+                <label htmlFor="document-type" style={{ display: 'block', fontWeight: '600', marginBottom: '6px', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Loại tài liệu *</label>
                 <input 
+                  id="document-type"
                   type="text" 
                   value={docType} 
                   onChange={e => setDocType(e.target.value)} 
-                  disabled={docModalMode === 'edit'}
+                  disabled={docModalMode !== 'add'}
                   placeholder="VD: Kiểm định, Hiệu chuẩn..."
                   required
                   list="doc-types-list"
                   style={{ width: '100%', padding: '10px 14px', border: '1.5px solid var(--border)', borderRadius: '8px', fontSize: '0.95rem', boxSizing: 'border-box' }}
                 />
                 <datalist id="doc-types-list">
+                  <option value="Đăng kiểm" />
                   <option value="Kiểm định" />
                   <option value="Hiệu chuẩn" />
                   <option value="Kiểm tra định kỳ" />
@@ -574,8 +742,9 @@ const DeviceProfile: React.FC = () => {
                 </datalist>
               </div>
               <div>
-                <label style={{ display: 'block', fontWeight: '600', marginBottom: '6px', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Số văn bản / số đăng kiểm</label>
+                <label htmlFor="document-license-number" style={{ display: 'block', fontWeight: '600', marginBottom: '6px', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Số văn bản / số đăng kiểm</label>
                 <input 
+                  id="document-license-number"
                   type="text" 
                   value={licenseNo} 
                   onChange={e => setLicenseNo(e.target.value)} 
@@ -584,8 +753,9 @@ const DeviceProfile: React.FC = () => {
                 />
               </div>
               <div>
-                <label style={{ display: 'block', fontWeight: '600', marginBottom: '6px', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Ngày cấp / ngày đăng kiểm</label>
+                <label htmlFor="document-issued-date" style={{ display: 'block', fontWeight: '600', marginBottom: '6px', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Ngày cấp / ngày đăng kiểm</label>
                 <input 
+                  id="document-issued-date"
                   type="date" 
                   value={issuedDate} 
                   onChange={e => setIssuedDate(e.target.value)} 
@@ -593,17 +763,20 @@ const DeviceProfile: React.FC = () => {
                 />
               </div>
               <div>
-                <label style={{ display: 'block', fontWeight: '600', marginBottom: '6px', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Hạn đăng kiểm / hạn hiệu lực</label>
+                <label htmlFor="document-expiry-date" style={{ display: 'block', fontWeight: '600', marginBottom: '6px', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Hạn đăng kiểm / hạn hiệu lực {docModalMode === 'renew' ? '*' : ''}</label>
                 <input 
+                  id="document-expiry-date"
                   type="date" 
                   value={expiryDate} 
                   onChange={e => setExpiryDate(e.target.value)} 
+                  required={docModalMode === 'renew'}
                   style={{ width: '100%', padding: '10px 14px', border: '1.5px solid var(--border)', borderRadius: '8px', fontSize: '0.95rem', boxSizing: 'border-box' }}
                 />
               </div>
               <div>
-                <label style={{ display: 'block', fontWeight: '600', marginBottom: '6px', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Thời gian chuẩn bị hồ sơ (ngày)</label>
+                <label htmlFor="document-preparation-days" style={{ display: 'block', fontWeight: '600', marginBottom: '6px', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Thời gian chuẩn bị hồ sơ (ngày)</label>
                 <input 
+                  id="document-preparation-days"
                   type="number" 
                   value={prepTime} 
                   onChange={e => setPrepTime(e.target.value)} 
@@ -612,10 +785,16 @@ const DeviceProfile: React.FC = () => {
                 />
               </div>
               <div>
-                <label style={{ display: 'block', fontWeight: '600', marginBottom: '6px', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Trạng thái hồ sơ</label>
+                <label htmlFor="document-status" style={{ display: 'block', fontWeight: '600', marginBottom: '6px', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Trạng thái hồ sơ</label>
                 <select 
+                  id="document-status"
                   value={docStatus} 
-                  onChange={e => setDocStatus(e.target.value)} 
+                  onChange={e => {
+                    const nextStatus = e.target.value;
+                    setDocStatus(nextStatus);
+                    if (nextStatus === 'Đã gửi' && !sentDate) setSentDate(getTodayInputDate());
+                  }}
+                  disabled={docModalMode === 'renew'}
                   style={{ width: '100%', padding: '10px 14px', border: '1.5px solid var(--border)', borderRadius: '8px', fontSize: '0.95rem', boxSizing: 'border-box', background: 'var(--surface)', color: 'var(--text-primary)' }}
                 >
                   <option value="Chưa gửi">Chưa gửi</option>
@@ -625,8 +804,23 @@ const DeviceProfile: React.FC = () => {
                 </select>
               </div>
               <div>
-                <label style={{ display: 'block', fontWeight: '600', marginBottom: '6px', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Người chịu trách nhiệm</label>
+                <label htmlFor="document-sent-date" style={{ display: 'block', fontWeight: '600', marginBottom: '6px', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Ngày gửi đăng kiểm</label>
+                <input
+                  id="document-sent-date"
+                  type="date"
+                  value={sentDate}
+                  onChange={e => setSentDate(e.target.value)}
+                  aria-describedby="document-sent-date-help"
+                  style={{ width: '100%', padding: '10px 14px', border: '1.5px solid var(--border)', borderRadius: '8px', fontSize: '0.95rem', boxSizing: 'border-box' }}
+                />
+                <small id="document-sent-date-help" style={{ display: 'block', marginTop: '4px', color: 'var(--text-secondary)' }}>
+                  Tự động điền khi bấm “Đánh dấu đã gửi”.
+                </small>
+              </div>
+              <div>
+                <label htmlFor="document-responsible" style={{ display: 'block', fontWeight: '600', marginBottom: '6px', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Người chịu trách nhiệm</label>
                 <input 
+                  id="document-responsible"
                   type="text" 
                   value={responsible} 
                   onChange={e => setResponsible(e.target.value)} 
@@ -635,8 +829,9 @@ const DeviceProfile: React.FC = () => {
                 />
               </div>
               <div>
-                <label style={{ display: 'block', fontWeight: '600', marginBottom: '6px', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Phối hợp thực hiện</label>
+                <label htmlFor="document-collaborator" style={{ display: 'block', fontWeight: '600', marginBottom: '6px', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Phối hợp thực hiện</label>
                 <input 
+                  id="document-collaborator"
                   type="text" 
                   value={collaborator} 
                   onChange={e => setCollaborator(e.target.value)} 
@@ -645,8 +840,9 @@ const DeviceProfile: React.FC = () => {
                 />
               </div>
               <div style={{ gridColumn: '1 / -1' }}>
-                <label style={{ display: 'block', fontWeight: '600', marginBottom: '6px', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Giao quản lý tại khoa</label>
+                <label htmlFor="document-department-manager" style={{ display: 'block', fontWeight: '600', marginBottom: '6px', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Giao quản lý tại khoa</label>
                 <input 
+                  id="document-department-manager"
                   type="text" 
                   value={deptManager} 
                   onChange={e => setDeptManager(e.target.value)} 
@@ -662,7 +858,11 @@ const DeviceProfile: React.FC = () => {
                   maxSizeMB={10}
                   maxTotalSizeMB={10}
                   maxFiles={1}
-                  label={docModalMode === 'edit' ? 'Thay thế file tài liệu (để trống nếu giữ nguyên file cũ)' : 'File tài liệu đính kèm'}
+                  label={docModalMode === 'edit'
+                    ? 'Thay thế file tài liệu (để trống nếu giữ nguyên file cũ)'
+                    : docModalMode === 'renew'
+                      ? 'File chứng nhận đăng kiểm mới'
+                      : 'File tài liệu đính kèm'}
                   helperText="Hỗ trợ PDF, Word, Excel, JPG và PNG"
                 />
               </div>
@@ -670,7 +870,9 @@ const DeviceProfile: React.FC = () => {
 
             <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', borderTop: '1px solid var(--border)', paddingTop: '16px' }}>
               <Button variant="secondary" type="button" onClick={() => setShowDocModal(false)}>Hủy</Button>
-              <Button variant="primary" type="submit" icon={<Save size={16} />}>Lưu tài liệu</Button>
+              <Button variant="primary" type="submit" icon={docModalMode === 'renew' ? <CalendarPlus size={16} /> : <Save size={16} />}>
+                {docModalMode === 'renew' ? 'Xác nhận gia hạn' : 'Lưu tài liệu'}
+              </Button>
             </div>
           </form>
         </Modal>

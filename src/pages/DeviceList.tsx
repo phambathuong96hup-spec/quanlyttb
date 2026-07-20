@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Plus, Download, Printer, Search, Eye, Edit2, Save, Loader2, CheckCircle, AlertTriangle, Monitor, X, Wrench, ShieldAlert, CalendarX2 } from 'lucide-react';
+import { Plus, Download, Printer, Search, Eye, Edit2, Save, Loader2, CheckCircle, AlertTriangle, Monitor, X, Wrench, ShieldAlert, CalendarX2, BookOpen } from 'lucide-react';
 import { Card, Button, Input, Table, TableHead, TableBody, TableRow, TableHeader, TableCell, Modal, useToast } from '../components/ui';
 import { addDevice, editDevice, type DeviceData } from '../services/api';
 import { useDevices } from '../hooks/useDevices';
 import { useAuth } from '../authContext';
 import { exportCsv } from '../utils/exportCsv';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { QRCodeSVG } from 'qrcode.react';
 import { matchSmartSearch } from '../utils/stringUtils';
 import {
@@ -235,6 +235,14 @@ const DeviceList: React.FC = () => {
           >
             In QR theo khoa/phòng
           </Button>
+          <Link
+            to="/dinh-muc"
+            className="btn btn-secondary btn-md device-norms-link"
+            aria-label="Tra cứu định mức vật tư năm 2026 theo khoa/phòng"
+          >
+            <span className="btn-icon" aria-hidden="true"><BookOpen size={18} /></span>
+            Tra cứu định mức 2026
+          </Link>
           {isAdmin && <Button variant="primary" icon={<Plus size={18} />} onClick={openAddModal}>Thêm thiết bị mới</Button>}
         </div>
       </div>

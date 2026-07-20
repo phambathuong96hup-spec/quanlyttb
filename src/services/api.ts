@@ -1,6 +1,7 @@
 import { getAuthPayload, invalidateAuthSession } from '../authSession.ts';
 
 import { parseVietnameseDate } from '../utils/dateUtils.ts';
+import { isArchivedDocumentStatus } from '../utils/documentWorkflow.ts';
 import { unwrapAppsScriptReadResponse } from './apiEnvelope.ts';
 
 // WARNING: Hardcoding the GAS URL/key here is a security risk. In production, always use env variables.
@@ -41,6 +42,7 @@ const getText = (row: ApiRow, keys: string[], fallback = '') => {
   return fallback;
 };
 export interface DeviceDocument {
+  documentId?: string;
   docType: string;
   licenseNo: string;
   frequency: string;
@@ -48,6 +50,7 @@ export interface DeviceDocument {
   expiryDate: string;
   prepTime: string;
   status: string;
+  sentDate?: string;
   daysUntilExpiry: number | null;
   responsible?: string;
   collaborator?: string;
@@ -212,6 +215,7 @@ const parseDocuments = (rawDocs: unknown[]): DeviceDocument[] => {
       }
     }
     return {
+      documentId: getText(d, ['DocumentId', 'documentId']),
       docType: getText(d, ['Loại tài liệu', 'docType']),
       licenseNo: getText(d, ['Số văn bản / Số Đăng kiểm', 'licenseNo']),
       frequency: '',
@@ -219,6 +223,7 @@ const parseDocuments = (rawDocs: unknown[]): DeviceDocument[] => {
       expiryDate: expiryStr,
       prepTime: getText(d, ['Thời gian chuẩn bị hồ sơ (ngày)', 'prepTime']),
       status: getText(d, ['Trạng thái Hồ sơ', 'status'], 'Chưa gửi'),
+      sentDate: getText(d, ['Ngày gửi đăng kiểm', 'sentDate']),
       daysUntilExpiry,
       responsible: getText(d, ['Người chịu trách nhiệm', 'responsible', 'responsiblePerson']),
       collaborator: getText(d, ['Phối hợp thực hiện', 'collaborator', 'cooperator']),
@@ -247,7 +252,7 @@ export const fetchDevices = async (): Promise<DeviceData[]> => {
     // Tìm tài liệu khẩn cấp nhất
     let alertLevel: DeviceData['alertLevel'] = 'ok';
     let minDaysUntil: number | undefined;
-    documents.forEach(doc => {
+    documents.filter(doc => !isArchivedDocumentStatus(doc.status)).forEach(doc => {
       if (doc.daysUntilExpiry !== null) {
         if (minDaysUntil === undefined || doc.daysUntilExpiry < minDaysUntil) {
           minDaysUntil = doc.daysUntilExpiry;
@@ -361,9 +366,27 @@ export const editDevice = async (payload: {
   return postAction('editDevice', payload);
 };
 
-export const updateDocumentStatus = async (serial: string, status: string, docType?: string) => {
-  return postAction('updateDocStatus', { serial, status, docType: docType || '' });
+export const updateDocumentStatus = async (
+  serial: string,
+  status: string,
+  docType?: string,
+  options: { sentDate?: string; documentId?: string } = {},
+) => {
+  return postAction('updateDocStatus', {
+    serial,
+    status,
+    docType: docType || '',
+    sentDate: options.sentDate || '',
+    documentId: options.documentId || '',
+  });
 };
+
+export const markDocumentSent = async (
+  serial: string,
+  docType: string,
+  sentDate: string,
+  documentId?: string,
+) => updateDocumentStatus(serial, 'Đã gửi', docType, { sentDate, documentId });
 
 const mapTransfer = (item: ApiRow): TransferData => ({
   transferId: getText(item, ['TransferId', 'Thời gian']),
@@ -652,22 +675,30 @@ export const deleteInventoryRun = async (payload: {
   return postAction('deleteInventoryRun', payload);
 };
 
-export const addDocument = async (payload: {
+export interface SaveDocumentPayload extends Record<string, unknown> {
   serial: string;
   docType: string;
+  documentId?: string;
   licenseNo?: string;
   issuedDate?: string;
   expiryDate?: string;
   prepTime?: string;
   status?: string;
+  sentDate?: string;
   responsible?: string;
   collaborator?: string;
   deptManager?: string;
   fileName?: string;
   fileContent?: string;
   mimeType?: string;
-}) => {
+}
+
+export const addDocument = async (payload: SaveDocumentPayload) => {
   return postAction('addDocument', payload);
+};
+
+export const renewDocument = async (payload: SaveDocumentPayload & { expiryDate: string }) => {
+  return postAction('renewDocument', payload);
 };
 
 export const fetchDepartments = async (): Promise<string[]> => {

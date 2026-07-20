@@ -1,5 +1,6 @@
 import type { DeviceData, DeviceDocument, RepairData, TransferData } from '../services/api';
 import { parseFlexibleDate } from './dateUtils.ts';
+import { isArchivedDocumentStatus } from './documentWorkflow.ts';
 import { removeVietnameseTones } from './stringUtils.ts';
 
 export type ComplianceStatusKind = 'expired' | 'warning' | 'missing' | 'sent' | 'valid';
@@ -222,7 +223,7 @@ const buildLegacyInspectionItem = (device: DeviceData, index: number, today: Dat
 
 export const buildInspectionItems = (devices: DeviceData[], today = new Date()): InspectionItem[] => {
   return devices.flatMap((device, deviceIndex) => {
-    const docs = device.documents || [];
+    const docs = (device.documents || []).filter(doc => !isArchivedDocumentStatus(doc.status));
     if (docs.length === 0) {
       const legacyItem = buildLegacyInspectionItem(device, deviceIndex, today);
       return legacyItem ? [legacyItem] : [];

@@ -159,6 +159,30 @@ test('buildInspectionItems classifies expired, warning, missing, and sent docume
   assert.equal(items.find(item => item.deviceId === 'TB-005'), undefined);
 });
 
+test('buildInspectionItems excludes superseded registration certificates', () => {
+  const renewedDevice: DeviceData = {
+    ...devices[0],
+    documents: [
+      { ...devices[0].documents![0], documentId: 'DOC-OLD', status: 'Đã gia hạn' },
+      {
+        ...devices[0].documents![0],
+        documentId: 'DOC-NEW',
+        licenseNo: 'KD-02',
+        issuedDate: '21/05/2026',
+        expiryDate: '21/05/2027',
+        status: 'Đã phê duyệt',
+        daysUntilExpiry: 363,
+      },
+    ],
+  };
+
+  const items = buildInspectionItems([renewedDevice], today);
+
+  assert.equal(items.length, 1);
+  assert.equal(items[0]?.licenseNo, 'KD-02');
+  assert.equal(items[0]?.statusKind, 'sent');
+});
+
 test('buildInspectionTasks creates actionable tasks and applies workflow overrides', () => {
   const items = buildInspectionItems(devices, today);
   const expired = items.find(item => item.deviceId === 'TB-001');

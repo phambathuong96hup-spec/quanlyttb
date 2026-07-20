@@ -72,6 +72,7 @@ const DEVICE_HEADERS = [
 
 const DOCUMENT_HEADERS = [
   'DeviceId',
+  'DocumentId',
   'Tên Thiết bị',
   'Loại tài liệu',
   'Số văn bản / Số Đăng kiểm',
@@ -79,6 +80,7 @@ const DOCUMENT_HEADERS = [
   'Hạn đăng kiểm / Hạn hiệu lực',
   'Thời gian chuẩn bị hồ sơ (ngày)',
   'Trạng thái Hồ sơ',
+  'Ngày gửi đăng kiểm',
   'Người chịu trách nhiệm',
   'Phối hợp thực hiện',
   'Giao quản lý tại khoa',
@@ -240,6 +242,10 @@ function route_(action, payload) {
       actor = requireAuthenticated_(payload);
       if (!actor) return authError_();
       return addDocument_(payload, actor);
+    case 'renewDocument':
+      actor = requireAuthenticated_(payload);
+      if (!actor) return authError_();
+      return renewDocument_(payload, actor);
     case 'createTransfer':
       actor = requireAuthenticated_(payload);
       if (!actor) return authError_();
@@ -639,6 +645,41 @@ function statusDaysUntil_(dateStr, today) {
   return Math.round((dateOnly.getTime() - todayOnly.getTime()) / (24 * 60 * 60 * 1000));
 }
 
+function isRenewedDocument_(doc) {
+  return normalizeHeader_(doc && (doc['Trạng thái Hồ sơ'] || doc.status || '')) === 'dagiahan';
+}
+
+function newDocumentId_() {
+  if (typeof Utilities !== 'undefined' && Utilities.getUuid) {
+    return 'DOC-' + Utilities.getUuid();
+  }
+  return 'DOC-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10);
+}
+
+function todayDocumentDate_() {
+  const now = new Date();
+  if (typeof Utilities !== 'undefined' && Utilities.formatDate) {
+    const timeZone = typeof Session !== 'undefined' && Session.getScriptTimeZone
+      ? (Session.getScriptTimeZone() || 'Asia/Bangkok')
+      : 'Asia/Bangkok';
+    return Utilities.formatDate(now, timeZone, 'dd/MM/yyyy');
+  }
+  const bangkok = new Date(now.getTime() + (7 * 60 * 60 * 1000));
+  return String(bangkok.getUTCDate()).padStart(2, '0')
+    + '/' + String(bangkok.getUTCMonth() + 1).padStart(2, '0')
+    + '/' + bangkok.getUTCFullYear();
+}
+
+function documentMutationLock_() {
+  if (typeof LockService !== 'undefined' && LockService.getScriptLock) {
+    return LockService.getScriptLock();
+  }
+  return {
+    tryLock: function() { return true; },
+    releaseLock: function() {}
+  };
+}
+
 function resolveDeviceAggregateStatus_(device, docs) {
   const today = new Date();
   const physicalStatus = normalizeHeader_(device['Hiện trạng thực tế'] || device.operationalStatus || device.status || '');
@@ -653,6 +694,8 @@ function resolveDeviceAggregateStatus_(device, docs) {
 
   const daysList = [];
   (docs || []).forEach(doc => {
+    // Hồ sơ "Đã gia hạn" chỉ còn ý nghĩa lịch sử, không tham gia cảnh báo hiện hành.
+    if (isRenewedDocument_(doc)) return;
     const days = statusDaysUntil_(doc['Hạn đăng kiểm / Hạn hiệu lực'] || doc.expiryDate, today);
     if (typeof days === 'number') daysList.push(days);
   });
@@ -736,6 +779,7 @@ function getDevicesJoined_() {
     let minTime = Infinity;
     
     devDocs.forEach(doc => {
+      if (isRenewedDocument_(doc)) return;
       const expDateStr = doc['Hạn đăng kiểm / Hạn hiệu lực'];
       if (expDateStr && expDateStr !== 'N/A') {
         const time = parseDate_(expDateStr).getTime();
@@ -905,6 +949,7 @@ function importSnapshotDevices_(payload, actor) {
     (item.documents || []).forEach((doc, docIndex) => {
       const documentObject = {
         DeviceId: deviceId,
+        DocumentId: doc.documentId || doc.DocumentId || newDocumentId_(),
         'Tên Thiết bị': deviceName,
         'Loại tài liệu': inferSnapshotDocType_(doc, docIndex),
         'Số văn bản / Số Đăng kiểm': doc.licenseNo || '',
@@ -912,6 +957,7 @@ function importSnapshotDevices_(payload, actor) {
         'Hạn đăng kiểm / Hạn hiệu lực': doc.expiryDate || '',
         'Thời gian chuẩn bị hồ sơ (ngày)': doc.prepTime || '',
         'Trạng thái Hồ sơ': doc.status || 'Chưa gửi',
+        'Ngày gửi đăng kiểm': doc.sentDate || doc['Ngày gửi đăng kiểm'] || '',
         'Người chịu trách nhiệm': doc.responsiblePerson || doc.responsible || '',
         'Phối hợp thực hiện': doc.cooperator || doc.collaborator || '',
         'Giao quản lý tại khoa': doc.departmentManager || doc.deptManager || '',
@@ -1788,6 +1834,55 @@ function hasDocumentCreateAccess_(actor, device) {
   return Boolean(actorDepartment && deviceDepartment && actorDepartment === deviceDepartment);
 }
 
+function findDocumentEntry_(rows, payload) {
+  const documentId = String(payload.documentId || '').trim();
+  const deviceId = String(payload.serial || '').trim();
+  const docType = String(payload.docType || '').trim();
+
+  if (documentId) {
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      if (String(row.DocumentId || '').trim() !== documentId) continue;
+      if (deviceId && String(row.DeviceId || '').trim() !== deviceId) {
+        return { rowIndex: -1, document: null, identityMismatch: true };
+      }
+      return { rowIndex: i + 2, document: row, identityMismatch: false };
+    }
+    return { rowIndex: -1, document: null, identityMismatch: false };
+  }
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    if (isRenewedDocument_(row)) continue;
+    if (String(row.DeviceId || '').trim() !== deviceId) continue;
+    if (docType && String(row['Loại tài liệu'] || '').trim() !== docType) continue;
+    return { rowIndex: i + 2, document: row, identityMismatch: false };
+  }
+  return { rowIndex: -1, document: null, identityMismatch: false };
+}
+
+function uploadDocumentFile_(payload, fallbackUrl) {
+  let fileUrl = payload.fileUrl || '';
+  if (payload.fileContent && payload.fileName) {
+    let folder;
+    try {
+      const ss = SpreadsheetApp.openById(DEVICE_SPREADSHEET_ID);
+      const parentFolder = DriveApp.getFileById(ss.getId()).getParents().next();
+      const folders = parentFolder.getFoldersByName('Tài liệu kiểm định');
+      folder = folders.hasNext() ? folders.next() : parentFolder.createFolder('Tài liệu kiểm định');
+    } catch (e) {
+      folder = DriveApp.getRootFolder();
+    }
+
+    const decoded = Utilities.base64Decode(payload.fileContent);
+    const blob = Utilities.newBlob(decoded, payload.mimeType || 'application/pdf', payload.fileName);
+    const file = folder.createFile(blob);
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    fileUrl = file.getUrl();
+  }
+  return fileUrl || fallbackUrl || '';
+}
+
 function updateDocStatus_(payload, actor) {
   const deviceId = String(payload.serial || '').trim();
   const docType = String(payload.docType || '').trim();
@@ -1799,20 +1894,14 @@ function updateDocStatus_(payload, actor) {
   const device = devRows.find(d => String(d.id || d['Seri Máy'] || '').trim() === deviceId);
   
   const rows = getRows_(SHEETS.documents);
-  let foundIndex = -1;
-  let existingDoc = null;
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i];
-    if (String(row.DeviceId || '').trim() === deviceId) {
-      if (!docType || String(row['Loại tài liệu'] || '').trim() === docType) {
-        foundIndex = i + 2;
-        existingDoc = row;
-        break;
-      }
-    }
-  }
+  const match = findDocumentEntry_(rows, payload);
+  const foundIndex = match.rowIndex;
+  const existingDoc = match.document;
   
   if (foundIndex < 2) {
+    if (match.identityMismatch) {
+      return { success: false, message: 'DocumentId không thuộc thiết bị đã chọn.' };
+    }
     return { success: false, message: 'Không tìm thấy tài liệu đăng kiểm phù hợp cho thiết bị ' + deviceId + ' (Loại: ' + (docType || 'Bất kỳ') + ').' };
   }
   
@@ -1822,10 +1911,22 @@ function updateDocStatus_(payload, actor) {
   }
   
   const oldStatus = existingDoc['Trạng thái Hồ sơ'] || '';
-  updateRowByObject_(SHEETS.documents, foundIndex, {
+  const updateData = {
+    'DocumentId': existingDoc.DocumentId || newDocumentId_(),
     'Trạng thái Hồ sơ': status,
     'Ngày cập nhật': new Date()
-  });
+  };
+  const requestedSentDate = payload.sentDate !== undefined
+    ? String(payload.sentDate || '').trim()
+    : '';
+  if (requestedSentDate) {
+    updateData['Ngày gửi đăng kiểm'] = requestedSentDate;
+  } else if (normalizeHeader_(status) === 'dagui') {
+    updateData['Ngày gửi đăng kiểm'] = existingDoc['Ngày gửi đăng kiểm'] || todayDocumentDate_();
+  } else if (payload.sentDate !== undefined) {
+    updateData['Ngày gửi đăng kiểm'] = '';
+  }
+  updateRowByObject_(SHEETS.documents, foundIndex, updateData);
   syncDeviceStatusForDevice_(deviceId);
   
   // Ghi log hoạt động
@@ -1833,11 +1934,19 @@ function updateDocStatus_(payload, actor) {
     'Cập nhật trạng thái tài liệu',
     deviceId,
     device ? (device['Tên Thiết bị'] || '') : '',
-    'Cập nhật trạng thái tài liệu "' + docType + '" từ "' + oldStatus + '" thành "' + status + '".',
+    'Cập nhật trạng thái tài liệu "' + (docType || existingDoc['Loại tài liệu'] || '') + '" từ "' + oldStatus + '" thành "' + status + '".'
+      + (updateData['Ngày gửi đăng kiểm'] ? (' Ngày gửi đăng kiểm: ' + updateData['Ngày gửi đăng kiểm'] + '.') : ''),
     actor
   );
   
-  return { success: true, message: 'Đã cập nhật trạng thái tài liệu ' + docType + ' của thiết bị ' + deviceId + ' thành "' + status + '".' };
+  return {
+    success: true,
+    message: 'Đã cập nhật trạng thái tài liệu ' + (docType || existingDoc['Loại tài liệu'] || '') + ' của thiết bị ' + deviceId + ' thành "' + status + '".',
+    documentId: updateData.DocumentId,
+    sentDate: updateData['Ngày gửi đăng kiểm'] !== undefined
+      ? updateData['Ngày gửi đăng kiểm']
+      : (existingDoc['Ngày gửi đăng kiểm'] || '')
+  };
 }
 
 function addDocument_(payload, actor) {
@@ -1851,17 +1960,18 @@ function addDocument_(payload, actor) {
   const devRows = getRows_(SHEETS.devices);
   const device = devRows.find(d => String(d.id || d['Seri Máy'] || '').trim() === deviceId);
   
-  // Kiểm tra xem đã tồn tại loại tài liệu này cho thiết bị chưa
+  // Ưu tiên định danh ổn định; chỉ dùng DeviceId + loại tài liệu cho dữ liệu cũ.
   const rows = getRows_(SHEETS.documents);
-  let foundIndex = -1;
-  let existingDoc = null;
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i];
-    if (String(row.DeviceId || '').trim() === deviceId && String(row['Loại tài liệu'] || '').trim() === docType) {
-      foundIndex = i + 2;
-      existingDoc = row;
-      break;
-    }
+  const match = findDocumentEntry_(rows, payload);
+  const foundIndex = match.rowIndex;
+  const existingDoc = match.document;
+  if (payload.documentId && foundIndex < 2) {
+    return {
+      success: false,
+      message: match.identityMismatch
+        ? 'DocumentId không thuộc thiết bị đã chọn.'
+        : 'Không tìm thấy tài liệu cần cập nhật.'
+    };
   }
   
   // Kiểm tra quyền truy cập tài liệu
@@ -1872,46 +1982,32 @@ function addDocument_(payload, actor) {
     return { success: false, message: 'Bạn không có quyền thêm hoặc sửa đổi tài liệu cho thiết bị này.' };
   }
   
-  let fileUrl = payload.fileUrl || '';
-  
-  // Nếu có file đính kèm dạng Base64
-  if (payload.fileContent && payload.fileName) {
-    try {
-      let folder;
-      try {
-        const ss = SpreadsheetApp.openById(DEVICE_SPREADSHEET_ID);
-        const parentFolder = DriveApp.getFileById(ss.getId()).getParents().next();
-        const folders = parentFolder.getFoldersByName('Tài liệu kiểm định');
-        if (folders.hasNext()) {
-          folder = folders.next();
-        } else {
-          folder = parentFolder.createFolder('Tài liệu kiểm định');
-        }
-      } catch (e) {
-        folder = DriveApp.getRootFolder();
-      }
-      
-      const decoded = Utilities.base64Decode(payload.fileContent);
-      const blob = Utilities.newBlob(decoded, payload.mimeType || 'application/pdf', payload.fileName);
-      const file = folder.createFile(blob);
-      file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-      fileUrl = file.getUrl();
-    } catch (err) {
-      return { success: false, message: 'Không thể tải file lên Google Drive: ' + err.toString() };
-    }
-  }
-  
   const existingLink = foundIndex >= 2 ? existingDoc['Link tài liệu'] || '' : '';
-  const finalFileUrl = fileUrl || existingLink;
+  let finalFileUrl = '';
+  try {
+    finalFileUrl = uploadDocumentFile_(payload, existingLink);
+  } catch (err) {
+    return { success: false, message: 'Không thể tải file lên Google Drive: ' + err.toString() };
+  }
+
+  const status = payload.status || 'Chưa gửi';
+  let sentDate = payload.sentDate !== undefined
+    ? String(payload.sentDate || '').trim()
+    : (existingDoc ? String(existingDoc['Ngày gửi đăng kiểm'] || '').trim() : '');
+  if (!sentDate && ['dagui', 'dapheduyet'].indexOf(normalizeHeader_(status)) !== -1) {
+    sentDate = todayDocumentDate_();
+  }
   
   const docData = {
     'DeviceId': deviceId,
+    'DocumentId': existingDoc && existingDoc.DocumentId ? existingDoc.DocumentId : newDocumentId_(),
     'Loại tài liệu': docType,
     'Số văn bản / Số Đăng kiểm': payload.licenseNo || '',
     'Ngày cấp / Ngày Đăng kiểm': payload.issuedDate || '',
     'Hạn đăng kiểm / Hạn hiệu lực': payload.expiryDate || '',
     'Thời gian chuẩn bị hồ sơ (ngày)': payload.prepTime || '',
-    'Trạng thái Hồ sơ': payload.status || 'Chưa gửi',
+    'Trạng thái Hồ sơ': status,
+    'Ngày gửi đăng kiểm': sentDate,
     'Người chịu trách nhiệm': payload.responsible || '',
     'Phối hợp thực hiện': payload.collaborator || '',
     'Giao quản lý tại khoa': payload.deptManager || '',
@@ -1932,6 +2028,9 @@ function addDocument_(payload, actor) {
     if (oldDoc['Hạn đăng kiểm / Hạn hiệu lực'] !== docData['Hạn đăng kiểm / Hạn hiệu lực']) {
       changes.push('Hạn hiệu lực: "' + oldDoc['Hạn đăng kiểm / Hạn hiệu lực'] + '" -> "' + docData['Hạn đăng kiểm / Hạn hiệu lực'] + '"');
     }
+    if (oldDoc['Ngày gửi đăng kiểm'] !== docData['Ngày gửi đăng kiểm']) {
+      changes.push('Ngày gửi đăng kiểm: "' + (oldDoc['Ngày gửi đăng kiểm'] || '') + '" -> "' + docData['Ngày gửi đăng kiểm'] + '"');
+    }
     if (oldDoc['Link tài liệu'] !== docData['Link tài liệu']) {
       changes.push('Tập tin đính kèm được cập nhật mới');
     }
@@ -1947,7 +2046,7 @@ function addDocument_(payload, actor) {
       actor
     );
     
-    return { success: true, message: 'Đã cập nhật thông tin tài liệu và file.', fileUrl: finalFileUrl };
+    return { success: true, message: 'Đã cập nhật thông tin tài liệu và file.', documentId: docData.DocumentId, sentDate: sentDate, fileUrl: finalFileUrl };
   } else {
     // Tạo mới tài liệu
     docData['Ngày tạo'] = new Date();
@@ -1963,7 +2062,135 @@ function addDocument_(payload, actor) {
       actor
     );
     
-    return { success: true, message: 'Đã thêm mới tài liệu và file thành công.', fileUrl: finalFileUrl };
+    return { success: true, message: 'Đã thêm mới tài liệu và file thành công.', documentId: docData.DocumentId, sentDate: sentDate, fileUrl: finalFileUrl };
+  }
+}
+
+function renewDocument_(payload, actor) {
+  const deviceId = String(payload.serial || '').trim();
+  const requestedDocType = String(payload.docType || '').trim();
+  const expiryDate = String(payload.expiryDate || '').trim();
+  if (!deviceId || !expiryDate) {
+    return { success: false, message: 'Thiếu DeviceId hoặc hạn đăng kiểm mới.' };
+  }
+
+  const lock = documentMutationLock_();
+  if (!lock.tryLock(30000)) {
+    return { success: false, message: 'Hệ thống đang xử lý một lần gia hạn khác. Vui lòng thử lại.' };
+  }
+
+  try {
+    const devices = getRows_(SHEETS.devices);
+    const device = devices.find(d => String(d.id || d['Seri Máy'] || '').trim() === deviceId);
+    const rows = getRows_(SHEETS.documents);
+    const match = findDocumentEntry_(rows, payload);
+    if (match.rowIndex < 2 || !match.document) {
+      return {
+        success: false,
+        message: match.identityMismatch
+          ? 'DocumentId không thuộc thiết bị đã chọn.'
+          : 'Không tìm thấy tài liệu cần gia hạn.'
+      };
+    }
+
+    const existingDoc = match.document;
+    if (isRenewedDocument_(existingDoc)) {
+      return { success: false, message: 'Tài liệu này đã được gia hạn trước đó.' };
+    }
+    if (!hasDocumentAccess_(actor, device, existingDoc)) {
+      return { success: false, message: 'Bạn không có quyền gia hạn tài liệu cho thiết bị này.' };
+    }
+
+    const docType = requestedDocType || String(existingDoc['Loại tài liệu'] || '').trim();
+    if (!docType) {
+      return { success: false, message: 'Thiếu loại tài liệu đăng kiểm.' };
+    }
+
+    let fileUrl = '';
+    try {
+      // Hồ sơ gia hạn là một phiên bản mới, không tự dùng lại file của chứng nhận cũ.
+      fileUrl = uploadDocumentFile_(payload, '');
+    } catch (err) {
+      return { success: false, message: 'Không thể tải file gia hạn lên Google Drive: ' + err.toString() };
+    }
+
+    const now = new Date();
+    const oldDocumentId = existingDoc.DocumentId || newDocumentId_();
+    const newDocumentId = newDocumentId_();
+    const sentDate = String(payload.sentDate || '').trim()
+      || String(existingDoc['Ngày gửi đăng kiểm'] || '').trim()
+      || todayDocumentDate_();
+    const deviceName = device ? (device['Tên Thiết bị'] || device.name || '') : (existingDoc['Tên Thiết bị'] || '');
+    const newDocument = {
+      'DeviceId': deviceId,
+      'DocumentId': newDocumentId,
+      'Tên Thiết bị': deviceName,
+      'Loại tài liệu': docType,
+      'Số văn bản / Số Đăng kiểm': payload.licenseNo || '',
+      'Ngày cấp / Ngày Đăng kiểm': payload.issuedDate || '',
+      'Hạn đăng kiểm / Hạn hiệu lực': expiryDate,
+      'Thời gian chuẩn bị hồ sơ (ngày)': payload.prepTime !== undefined
+        ? payload.prepTime
+        : (existingDoc['Thời gian chuẩn bị hồ sơ (ngày)'] || ''),
+      'Trạng thái Hồ sơ': 'Đã phê duyệt',
+      'Ngày gửi đăng kiểm': sentDate,
+      'Người chịu trách nhiệm': payload.responsible !== undefined
+        ? payload.responsible
+        : (existingDoc['Người chịu trách nhiệm'] || ''),
+      'Phối hợp thực hiện': payload.collaborator !== undefined
+        ? payload.collaborator
+        : (existingDoc['Phối hợp thực hiện'] || ''),
+      'Giao quản lý tại khoa': payload.deptManager !== undefined
+        ? payload.deptManager
+        : (existingDoc['Giao quản lý tại khoa'] || ''),
+      'Ngày tạo': now,
+      'Ngày cập nhật': now,
+      'Link tài liệu': fileUrl
+    };
+
+    const oldState = {
+      documentId: existingDoc.DocumentId || '',
+      status: existingDoc['Trạng thái Hồ sơ'] || '',
+      updatedAt: existingDoc['Ngày cập nhật'] || ''
+    };
+    updateRowByObject_(SHEETS.documents, match.rowIndex, {
+      'DocumentId': oldDocumentId,
+      'Trạng thái Hồ sơ': 'Đã gia hạn',
+      'Ngày cập nhật': now
+    });
+    try {
+      appendObject_(SHEETS.documents, newDocument);
+    } catch (err) {
+      updateRowByObject_(SHEETS.documents, match.rowIndex, {
+        'DocumentId': oldState.documentId,
+        'Trạng thái Hồ sơ': oldState.status,
+        'Ngày cập nhật': oldState.updatedAt
+      });
+      throw err;
+    }
+
+    syncDeviceStatusForDevice_(deviceId);
+    logActivity_(
+      'Gia hạn đăng kiểm',
+      deviceId,
+      deviceName,
+      'Gia hạn đăng kiểm "' + docType + '" từ hồ sơ ' + oldDocumentId + ' sang ' + newDocumentId
+        + ' (Hạn mới: ' + expiryDate + ', số văn bản: ' + (payload.licenseNo || 'N/A') + ').',
+      actor
+    );
+
+    return {
+      success: true,
+      message: 'Đã gia hạn đăng kiểm và lưu hồ sơ mới.',
+      documentId: newDocumentId,
+      previousDocumentId: oldDocumentId,
+      sentDate: sentDate,
+      fileUrl: fileUrl
+    };
+  } catch (err) {
+    return { success: false, message: 'Không thể gia hạn đăng kiểm: ' + err.toString() };
+  } finally {
+    lock.releaseLock();
   }
 }
 
@@ -2729,7 +2956,10 @@ function getDeviceRecipients_(device) {
   }
   
   // 3. Tìm email từ documents (Người chịu trách nhiệm, Phối hợp, Giao quản lý)
-  const docs = getRows_(SHEETS.documents).filter(d => String(d.DeviceId || '').trim() === String(device.id || '').trim());
+  const docs = getRows_(SHEETS.documents).filter(d =>
+    String(d.DeviceId || '').trim() === String(device.id || '').trim()
+    && !isRenewedDocument_(d)
+  );
   docs.forEach(doc => {
     const responsible = String(doc['Người chịu trách nhiệm'] || '').trim();
     const collaborator = String(doc['Phối hợp thực hiện'] || '').trim();
@@ -2791,6 +3021,7 @@ function checkComplianceDeadlines() {
   // 1. Thu thập tất cả các cảnh báo
   const allAlerts = [];
   documents.forEach(doc => {
+    if (isRenewedDocument_(doc)) return;
     const expDateStr = String(doc['Hạn đăng kiểm / Hạn hiệu lực'] || '').trim();
     if (!expDateStr || expDateStr === 'N/A') return;
     
@@ -2858,7 +3089,19 @@ function checkComplianceDeadlines() {
     recipients.forEach(email => {
       if (!recipientAlerts[email]) recipientAlerts[email] = [];
       // Tránh duplicate nếu một người nhận nhiều nguồn
-      if (!recipientAlerts[email].some(a => a.doc['Mã Tài liệu'] === alert.doc['Mã Tài liệu'])) {
+      const alertDocumentId = alert.doc.DocumentId || [
+        alert.doc.DeviceId || '',
+        alert.doc['Loại tài liệu'] || '',
+        alert.doc['Hạn đăng kiểm / Hạn hiệu lực'] || ''
+      ].join('|');
+      if (!recipientAlerts[email].some(a => {
+        const existingDocumentId = a.doc.DocumentId || [
+          a.doc.DeviceId || '',
+          a.doc['Loại tài liệu'] || '',
+          a.doc['Hạn đăng kiểm / Hạn hiệu lực'] || ''
+        ].join('|');
+        return existingDocumentId === alertDocumentId;
+      })) {
         recipientAlerts[email].push(alert);
       }
     });

@@ -1,4 +1,5 @@
 import type { DeviceData, DeviceDocument } from '../services/api.ts';
+import { isArchivedDocumentStatus } from './documentWorkflow.ts';
 import { parseFlexibleDate } from './dateUtils.ts';
 import { removeVietnameseTones } from './stringUtils.ts';
 
@@ -134,6 +135,7 @@ export const getDeviceStatusFlags = (device: DeviceData, today = new Date()): De
   );
 
   const documentDays = (device.documents || [])
+    .filter(doc => !isArchivedDocumentStatus(doc.status))
     .map(doc => getDocumentDaysUntilExpiry(doc, today))
     .filter((days): days is number => typeof days === 'number');
   if (documentDays.length === 0) {

@@ -16,6 +16,7 @@ test('dedicated norms lookup is routed, visible in navigation, and accessible', 
 
   const app = readFileSync('src/App.tsx', 'utf8');
   const sidebar = readFileSync('src/components/layout/Sidebar.tsx', 'utf8');
+  const dashboard = readFileSync('src/pages/Dashboard.tsx', 'utf8');
   const page = readFileSync('src/pages/NormsLookup.tsx', 'utf8');
   const styles = readFileSync('src/pages/NormsLookup.css', 'utf8');
   const packageJson = readFileSync('package.json', 'utf8');
@@ -23,7 +24,9 @@ test('dedicated norms lookup is routed, visible in navigation, and accessible', 
   assert.match(app, /const NormsLookup = lazy\(\(\) => import\('\.\/pages\/NormsLookup'\)\)/);
   assert.match(app, /path="dinh-muc"/);
   assert.match(sidebar, /path: '\/dinh-muc'/);
-  assert.match(sidebar, /name: 'Định mức'/);
+  assert.match(sidebar, /name: 'Tra cứu định mức 2026'/);
+  assert.match(dashboard, /['"]\/dinh-muc['"]/);
+  assert.match(dashboard, /Tra cứu định mức 2026/);
   assert.match(page, /type="search"/);
   assert.match(page, /aria-live="polite"/);
   assert.match(page, /aria-pressed=/);

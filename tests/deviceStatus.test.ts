@@ -102,3 +102,38 @@ test('warning, reported, repairing, and unassigned filters use the same flags as
   assert.equal(matchesDeviceStatusFilter(unassignedDevice, 'unassigned', today), true);
   assert.equal(resolveDeviceListStatus(unassignedDevice, { today }).label, 'Chưa phân bổ');
 });
+
+test('an archived registration cycle does not keep the renewed device expired', () => {
+  const device = makeDevice({
+    documents: [
+      {
+        documentId: 'DOC-OLD',
+        docType: 'Đăng kiểm',
+        licenseNo: 'DK-OLD',
+        frequency: '',
+        issuedDate: '01/05/2025',
+        expiryDate: '20/05/2026',
+        prepTime: '30',
+        status: 'Đã gia hạn',
+        daysUntilExpiry: -3,
+      },
+      {
+        documentId: 'DOC-NEW',
+        docType: 'Đăng kiểm',
+        licenseNo: 'DK-NEW',
+        frequency: '',
+        issuedDate: '21/05/2026',
+        expiryDate: '21/05/2027',
+        prepTime: '30',
+        status: 'Đã phê duyệt',
+        daysUntilExpiry: 363,
+      },
+    ],
+  });
+
+  const flags = getDeviceStatusFlags(device, today);
+
+  assert.equal(flags.expired, false);
+  assert.equal(flags.complianceWarning, false);
+  assert.equal(flags.good, true);
+});
