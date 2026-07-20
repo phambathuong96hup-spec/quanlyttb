@@ -23,6 +23,26 @@ const LOG_HEADERS = [
 const DEVICE_SPREADSHEET_ID = '1fwwIwXpCqhCZzaitYs2__hzfuTNW7mcGAvKl3y_hqZ0';
 const USERS_SPREADSHEET_ID = '10yRv_RD5ersJzD9xd-UDkZ8-hoiHxRBW6bz71qtMqoQ';
 const USERS_SHEET_GID = 1113591284;
+const MAX_REPAIR_ATTACHMENTS = 8;
+const MAX_REPAIR_ATTACHMENT_SIZE_BYTES = 12 * 1024 * 1024;
+const MAX_REPAIR_ATTACHMENTS_TOTAL_BYTES = 16 * 1024 * 1024;
+const REPAIR_ATTACHMENT_MIME_TYPES = {
+  'image/jpeg': true,
+  'image/png': true,
+  'image/webp': true,
+  'video/mp4': true,
+  'video/quicktime': true,
+  'video/webm': true
+};
+const REPAIR_ATTACHMENT_EXTENSIONS = {
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.webp': 'image/webp',
+  '.mp4': 'video/mp4',
+  '.mov': 'video/quicktime',
+  '.webm': 'video/webm'
+};
 
 const DEVICE_HEADERS = [
   'id',
@@ -507,7 +527,23 @@ function formatMultilineHtml_(value) {
 function evidenceLinkRow_(label, imageUrl) {
   const url = String(imageUrl || '').trim();
   if (!url) return '';
-  return '<tr><td style="background:#f5f5f5;"><strong>' + escapeHtml_(label) + '</strong></td><td><a href="' + escapeHtml_(url) + '" target="_blank" rel="noopener">Mở file ảnh minh chứng</a></td></tr>';
+  return '<tr><td style="background:#f5f5f5;"><strong>' + escapeHtml_(label) + '</strong></td><td><a href="' + escapeHtml_(url) + '" target="_blank" rel="noopener">Mở tệp minh chứng</a></td></tr>';
+}
+
+function evidenceLinksRows_(files) {
+  if (!Array.isArray(files)) return '';
+  return files.map(function(file, index) {
+    const label = String(file.kind || 'Tệp') + ' minh chứng ' + String(index + 1) + ': ' + evidenceLabelFileName_(file.name);
+    return evidenceLinkRow_(label, file.url);
+  }).join('');
+}
+
+function evidenceLabelFileName_(fileName) {
+  const cleanedName = String(fileName || 'Không tên')
+    .replace(/[\[\]\r\n]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return cleanedName.substring(0, 120) || 'Không tên';
 }
 
 function signSessionValue_(value) {
@@ -1255,33 +1291,205 @@ function cancelTransfer_(payload) {
   return { success: true, message: 'Đã hủy yêu cầu luân chuyển.' };
 }
 
+function evidenceFileExtension_(fileName) {
+  const name = String(fileName || '').toLowerCase();
+  const dotIndex = name.lastIndexOf('.');
+  return dotIndex >= 0 ? name.substring(dotIndex) : '';
+}
+
+function supportedEvidenceFile_(attachment) {
+  const mimeType = String(attachment.mimeType || '').toLowerCase();
+  const expectedMimeType = REPAIR_ATTACHMENT_EXTENSIONS[evidenceFileExtension_(attachment.name)] || '';
+  return Boolean(expectedMimeType && (
+    !mimeType ||
+    mimeType === 'application/octet-stream' ||
+    (REPAIR_ATTACHMENT_MIME_TYPES[mimeType] && mimeType === expectedMimeType)
+  ));
+}
+
+function evidenceMimeType_(attachment) {
+  return REPAIR_ATTACHMENT_EXTENSIONS[evidenceFileExtension_(attachment.name)] || '';
+}
+
+function evidenceByte_(bytes, index) {
+  return (Number(bytes[index]) + 256) % 256;
+}
+
+function evidenceBytesMatch_(bytes, expected, offset) {
+  const start = offset || 0;
+  if (!bytes || bytes.length < start + expected.length) return false;
+  return expected.every(function(value, index) {
+    return evidenceByte_(bytes, start + index) === value;
+  });
+}
+
+function evidenceAsciiMatch_(bytes, value, offset) {
+  return evidenceBytesMatch_(bytes, value.split('').map(function(character) {
+    return character.charCodeAt(0);
+  }), offset);
+}
+
+function matchesEvidenceSignature_(bytes, attachment) {
+  const extension = evidenceFileExtension_(attachment.name);
+  if (extension === '.jpg' || extension === '.jpeg') {
+    return evidenceBytesMatch_(bytes, [0xFF, 0xD8, 0xFF], 0);
+  }
+  if (extension === '.png') {
+    return evidenceBytesMatch_(bytes, [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A], 0);
+  }
+  if (extension === '.webp') {
+    return evidenceAsciiMatch_(bytes, 'RIFF', 0) && evidenceAsciiMatch_(bytes, 'WEBP', 8);
+  }
+  if (extension === '.mp4' || extension === '.mov') {
+    return evidenceAsciiMatch_(bytes, 'ftyp', 4);
+  }
+  if (extension === '.webm') {
+    return evidenceBytesMatch_(bytes, [0x1A, 0x45, 0xDF, 0xA3], 0);
+  }
+  return false;
+}
+
+function evidenceFileKind_(attachment) {
+  const mimeType = String(attachment.mimeType || '').toLowerCase();
+  const extension = evidenceFileExtension_(attachment.name);
+  return mimeType.indexOf('video/') === 0 || ['.mp4', '.mov', '.webm'].indexOf(extension) !== -1 ? 'Video' : 'Ảnh';
+}
+
+function evidenceFolder_(folderName) {
+  try {
+    const ss = SpreadsheetApp.openById(DEVICE_SPREADSHEET_ID);
+    const parentFolder = DriveApp.getFileById(ss.getId()).getParents().next();
+    const resolvedName = folderName || 'HinhAnhMinhChung';
+    const folders = parentFolder.getFoldersByName(resolvedName);
+    return folders.hasNext() ? folders.next() : parentFolder.createFolder(resolvedName);
+  } catch (err) {
+    console.error('Không mở được thư mục minh chứng, dùng thư mục gốc:', err);
+    return DriveApp.getRootFolder();
+  }
+}
+
+function repairAttachmentsFromPayload_(payload) {
+  const attachments = [];
+  const addAttachment = function(attachment) {
+    if (!attachment) return;
+    const isDuplicate = attachments.some(function(current) {
+      return String(current.name || '') === String(attachment.name || '') &&
+        String(current.content || '') === String(attachment.content || '');
+    });
+    if (!isDuplicate) attachments.push(attachment);
+  };
+
+  if (payload.imageContent && payload.imageName) {
+    addAttachment({
+      content: payload.imageContent,
+      name: payload.imageName,
+      mimeType: payload.imageMimeType || 'image/jpeg',
+      size: 0
+    });
+  }
+  if (Array.isArray(payload.attachments)) {
+    payload.attachments.forEach(addAttachment);
+  }
+  return attachments;
+}
+
+function discardEvidenceFiles_(files) {
+  (files || []).forEach(function(file) {
+    if (!file.fileId) return;
+    try {
+      DriveApp.getFileById(file.fileId).setTrashed(true);
+    } catch (err) {
+      console.error('Không thể dọn tệp minh chứng ' + String(file.name || '') + ':', err);
+    }
+  });
+}
+
+function uploadEvidenceFilesToDrive_(payload, folderName) {
+  const incoming = repairAttachmentsFromPayload_(payload);
+  const result = { files: [], failures: [] };
+  if (incoming.length === 0) return result;
+
+  if (incoming.length > MAX_REPAIR_ATTACHMENTS) {
+    incoming.slice(MAX_REPAIR_ATTACHMENTS).forEach(function(attachment) {
+      result.failures.push(String(attachment.name || 'Tệp không tên'));
+    });
+  }
+
+  const attachments = incoming.slice(0, MAX_REPAIR_ATTACHMENTS);
+  let totalDecodedBytes = 0;
+  let folder = null;
+
+  attachments.forEach(function(attachment) {
+    const fileName = String(attachment.name || '').trim();
+    if (!fileName || !attachment.content || !supportedEvidenceFile_(attachment)) {
+      result.failures.push(fileName || 'Tệp không tên');
+      return;
+    }
+
+    let createdFile = null;
+    try {
+      let base64Data = String(attachment.content || '');
+      if (base64Data.indexOf('base64,') !== -1) {
+        base64Data = base64Data.split('base64,')[1];
+      }
+
+      const estimatedBytes = Math.floor(base64Data.length * 3 / 4);
+      if (estimatedBytes > MAX_REPAIR_ATTACHMENT_SIZE_BYTES || totalDecodedBytes + estimatedBytes > MAX_REPAIR_ATTACHMENTS_TOTAL_BYTES) {
+        result.failures.push(fileName);
+        return;
+      }
+
+      const decoded = Utilities.base64Decode(base64Data);
+      if (decoded.length > MAX_REPAIR_ATTACHMENT_SIZE_BYTES || totalDecodedBytes + decoded.length > MAX_REPAIR_ATTACHMENTS_TOTAL_BYTES) {
+        result.failures.push(fileName);
+        return;
+      }
+      totalDecodedBytes += decoded.length;
+      if (!matchesEvidenceSignature_(decoded, attachment)) {
+        result.failures.push(fileName);
+        return;
+      }
+
+      if (!folder) folder = evidenceFolder_(folderName);
+      const mimeType = evidenceMimeType_(attachment);
+      const blob = Utilities.newBlob(decoded, mimeType, fileName);
+      createdFile = folder.createFile(blob);
+      createdFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+      result.files.push({
+        url: createdFile.getUrl(),
+        fileId: createdFile.getId(),
+        name: fileName,
+        mimeType: mimeType,
+        kind: evidenceFileKind_(attachment)
+      });
+    } catch (err) {
+      console.error('Lỗi tải tệp minh chứng ' + fileName + ':', err);
+      if (createdFile) {
+        try {
+          createdFile.setTrashed(true);
+        } catch (cleanupError) {
+          console.error('Không thể dọn tệp tải lỗi ' + fileName + ':', cleanupError);
+        }
+      }
+      result.failures.push(fileName);
+    }
+  });
+
+  return result;
+}
+
 function uploadImageToDrive_(payload, folderName) {
   if (!payload.imageContent || !payload.imageName) return '';
   try {
-    let folder;
-    try {
-      const ss = SpreadsheetApp.openById(DEVICE_SPREADSHEET_ID);
-      const parentFolder = DriveApp.getFileById(ss.getId()).getParents().next();
-      const folders = parentFolder.getFoldersByName(folderName || 'HinhAnhMinhChung');
-      if (folders.hasNext()) {
-        folder = folders.next();
-      } else {
-        folder = parentFolder.createFolder(folderName || 'HinhAnhMinhChung');
-      }
-    } catch (e) {
-      folder = DriveApp.getRootFolder();
-    }
-    
-    let base64Data = payload.imageContent;
-    if (base64Data.indexOf('base64,') !== -1) {
-      base64Data = base64Data.split('base64,')[1];
-    }
-    
-    const decoded = Utilities.base64Decode(base64Data);
-    const blob = Utilities.newBlob(decoded, payload.imageMimeType || 'image/jpeg', payload.imageName);
-    const file = folder.createFile(blob);
-    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-    return file.getUrl();
+    const upload = uploadEvidenceFilesToDrive_({
+      attachments: [{
+        content: payload.imageContent,
+        name: payload.imageName,
+        mimeType: payload.imageMimeType || 'image/jpeg',
+        size: 0
+      }]
+    }, folderName);
+    return upload.files.length > 0 ? upload.files[0].url : '';
   } catch (err) {
     console.error('Lỗi tải ảnh:', err);
     return '';
@@ -1297,35 +1505,83 @@ function reportRepairDeviceStatus_(device) {
   return isPharmacyDepartment_(department) ? 'Hỏng chờ xử lý' : 'Báo hỏng - chờ duyệt';
 }
 
+function appendRepairAndGetRowId_(repair) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    const sheet = deviceSpreadsheet_().getSheetByName(SHEETS.repairs);
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+    sheet.appendRow(headers.map(function(header) {
+      return repair[header] === undefined ? '' : repair[header];
+    }));
+    try {
+      SpreadsheetApp.flush();
+      const timeColumnIndex = headers.indexOf('Thời gian') + 1;
+      return timeColumnIndex > 0
+        ? sheet.getRange(sheet.getLastRow(), timeColumnIndex).getDisplayValue()
+        : '';
+    } catch (readError) {
+      console.error('Đã ghi phiếu nhưng chưa đọc được mã dòng hiển thị:', readError);
+      return '';
+    }
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 function reportRepair_(payload, actor) {
   const deviceId = payload.deviceId || payload.serial || '';
   const cleanDeviceId = String(deviceId).replace('[KHẨN] ', '').trim();
-  
-  const imageUrl = uploadImageToDrive_(payload, 'AnhSuaChua');
-  let description = payload.description || '';
-  if (imageUrl) {
-    description += '\n[Ảnh minh chứng]: ' + imageUrl;
+  const submittedAt = new Date();
+  const evidenceUpload = uploadEvidenceFilesToDrive_(payload, 'AnhSuaChua');
+  if (evidenceUpload.failures.length > 0) {
+    discardEvidenceFiles_(evidenceUpload.files);
+    return {
+      success: false,
+      message: 'Không thể tải đủ tệp minh chứng. Phiếu chưa được tạo; vui lòng kiểm tra tệp và thử lại.',
+      attachmentCount: 0,
+      attachmentFailures: evidenceUpload.failures
+    };
   }
-  
-  appendObject_(SHEETS.repairs, {
-    'Thời gian': new Date(),
-    'Mã Máy/Thiết bị': deviceId,
-    'Người báo lỗi': payload.userName || payload.name || '',
-    'Email người báo': payload.userEmail || payload.email || '',
-    'Tên đăng nhập người báo': payload.actorUsername || '',
-    'Khoa/Phòng': payload.actorDepartment || '',
-    'Mô tả lỗi': description,
-    'Trạng Thái': 'Chờ duyệt'
+  let description = payload.description || '';
+  evidenceUpload.files.forEach(function(file, index) {
+    description += '\n[' + file.kind + ' minh chứng ' + String(index + 1) + ' - ' + evidenceLabelFileName_(file.name) + ']: ' + file.url;
   });
 
-  const deviceRowIndex = findDeviceRow_(cleanDeviceId);
-  const device = findDeviceById_(cleanDeviceId);
-  if (deviceRowIndex >= 2) {
-    updateRowByObject_(SHEETS.devices, deviceRowIndex, {
-      'Hiện trạng thực tế': reportRepairDeviceStatus_(device),
-      'Ngày cập nhật': new Date()
+  let repairRowId = '';
+  try {
+    repairRowId = appendRepairAndGetRowId_({
+      'Thời gian': submittedAt,
+      'Mã Máy/Thiết bị': deviceId,
+      'Người báo lỗi': payload.userName || payload.name || '',
+      'Email người báo': payload.userEmail || payload.email || '',
+      'Tên đăng nhập người báo': payload.actorUsername || '',
+      'Khoa/Phòng': payload.actorDepartment || '',
+      'Mô tả lỗi': description,
+      'Trạng Thái': 'Chờ duyệt'
     });
-    syncDeviceStatusForDevice_(cleanDeviceId);
+  } catch (err) {
+    console.error('Không thể ghi phiếu sửa chữa:', err);
+    discardEvidenceFiles_(evidenceUpload.files);
+    return {
+      success: false,
+      message: 'Không thể ghi phiếu sửa chữa. Tệp minh chứng đã được dọn; vui lòng thử lại.'
+    };
+  }
+
+  let device = null;
+  try {
+    const deviceRowIndex = findDeviceRow_(cleanDeviceId);
+    device = findDeviceById_(cleanDeviceId);
+    if (deviceRowIndex >= 2) {
+      updateRowByObject_(SHEETS.devices, deviceRowIndex, {
+        'Hiện trạng thực tế': reportRepairDeviceStatus_(device),
+        'Ngày cập nhật': new Date()
+      });
+      syncDeviceStatusForDevice_(cleanDeviceId);
+    }
+  } catch (err) {
+    console.error('Đã ghi phiếu nhưng chưa đồng bộ được trạng thái thiết bị:', err);
   }
 
   logActivity_(
@@ -1339,28 +1595,44 @@ function reportRepair_(payload, actor) {
   // Gửi email thông báo báo hỏng
   try {
     const recipients = device ? getDeviceRecipients_(device) : adminEmails_();
-      if (recipients.length > 0) {
-        sendNotificationMail_({
-          recipients: recipients,
+    if (recipients.length > 0) {
+      sendNotificationMail_({
+        recipients: recipients,
         subject: '[QLTTB] ⚠️ Báo hỏng thiết bị: ' + (device ? (device['Tên Thiết bị'] || cleanDeviceId) : cleanDeviceId),
-          body: [
-            '<h3 style="color:#d32f2f;">Thông báo thiết bị báo hỏng</h3>',
-            '<table style="border-collapse:collapse;width:100%;" border="1" cellpadding="8">',
+        body: [
+          '<h3 style="color:#d32f2f;">Thông báo thiết bị báo hỏng</h3>',
+          '<table style="border-collapse:collapse;width:100%;" border="1" cellpadding="8">',
           '<tr><td style="background:#f5f5f5;width:180px;"><strong>Mã thiết bị</strong></td><td>' + escapeHtml_(cleanDeviceId) + '</td></tr>',
           '<tr><td style="background:#f5f5f5;"><strong>Tên thiết bị</strong></td><td>' + escapeHtml_(device ? (device['Tên Thiết bị'] || '') : '') + '</td></tr>',
           '<tr><td style="background:#f5f5f5;"><strong>Model / Seri</strong></td><td>' + escapeHtml_(device ? (device.Model || '') : '') + ' / ' + escapeHtml_(device ? (device['Seri Máy'] || '') : '') + '</td></tr>',
           '<tr><td style="background:#f5f5f5;"><strong>Nơi đặt</strong></td><td>' + escapeHtml_(device ? (device['Nơi đặt thiết bị'] || '') : '') + '</td></tr>',
           '<tr><td style="background:#f5f5f5;"><strong>Người báo lỗi</strong></td><td>' + escapeHtml_(payload.userName || '') + ' (' + escapeHtml_(payload.userEmail || '') + ')</td></tr>',
           '<tr><td style="background:#f5f5f5;"><strong>Mô tả lỗi</strong></td><td style="color:#d32f2f;">' + formatMultilineHtml_(payload.description || '') + '</td></tr>',
-          evidenceLinkRow_('Ảnh minh chứng', imageUrl),
-            '</table>',
-            '<p style="margin-top:16px;">Vui lòng đăng nhập hệ thống <strong>Quản lý Trang thiết bị Y tế</strong> để xem chi tiết và xử lý.</p>'
-          ].join('')
-        });
-      }
+          evidenceLinksRows_(evidenceUpload.files),
+          '</table>',
+          '<p style="margin-top:16px;">Vui lòng đăng nhập hệ thống <strong>Quản lý Trang thiết bị Y tế</strong> để xem chi tiết và xử lý.</p>'
+        ].join('')
+      });
+    }
   } catch (err) { console.error('reportRepair_ email failed', err); }
 
-  return { success: true, message: 'Đã ghi nhận báo hỏng.' };
+  const response = {
+    success: true,
+    message: 'Đã ghi nhận báo hỏng.',
+    attachmentCount: evidenceUpload.files.length,
+    attachmentFailures: evidenceUpload.failures
+  };
+  if (repairRowId) {
+    response.repair = {
+      rowId: String(repairRowId),
+      deviceId: String(deviceId),
+      userName: String(payload.userName || payload.name || ''),
+      userEmail: String(payload.userEmail || payload.email || ''),
+      description: String(description),
+      status: 'Chờ duyệt'
+    };
+  }
+  return response;
 }
 
 function approveRepair_(payload, actor) {

@@ -427,6 +427,15 @@
   box-shadow: 0 12px 26px var(--request-accent-shadow);
 }
 
+.request-submit-status {
+  min-height: 20px;
+  margin: -4px 0 -8px;
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  font-weight: 650;
+  text-align: center;
+}
+
 .request-qr-button.btn {
   white-space: nowrap;
 }

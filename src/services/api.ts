@@ -4,7 +4,7 @@ import { parseVietnameseDate } from '../utils/dateUtils.ts';
 import { unwrapAppsScriptReadResponse } from './apiEnvelope.ts';
 
 // WARNING: Hardcoding the GAS URL/key here is a security risk. In production, always use env variables.
-const DEFAULT_GOOGLE_SHEETS_API_URL = 'https://script.google.com/macros/s/AKfycbzHzDXD7Ai6a4rgaNxM0baVnLZPp9kqt3FJS_ljI1NgPuN5_KdJgBW9nbEre7rNp7QOxw/exec';
+const DEFAULT_GOOGLE_SHEETS_API_URL = 'https://script.google.com/macros/s/AKfycbzSKzwvDvK_5eL83ZEqZpouG9HWaJEd6zIIkQxiR6ouozcjSPhfgIy9cbFbeYasgPE_Jg/exec';
 
 const ENV = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {};
 export const GOOGLE_SHEETS_API_URL = ENV.VITE_THIET_BI_API_URL || DEFAULT_GOOGLE_SHEETS_API_URL;
@@ -87,6 +87,32 @@ export interface RepairData {
   userEmail: string;
   description: string;
   status: string;
+}
+
+export interface RepairAttachmentPayload {
+  name: string;
+  mimeType: string;
+  size: number;
+  content: string;
+}
+
+export interface ReportRepairPayload extends Record<string, unknown> {
+  deviceId: string;
+  userName: string;
+  userEmail: string;
+  description: string;
+  attachments?: RepairAttachmentPayload[];
+  imageContent?: string;
+  imageName?: string;
+  imageMimeType?: string;
+}
+
+export interface ReportRepairResponse {
+  success: boolean;
+  message?: string;
+  repair?: RepairData;
+  attachmentCount?: number;
+  attachmentFailures?: string[];
 }
 
 export interface TransferData {
@@ -307,8 +333,8 @@ export const fetchRepairs = async (): Promise<RepairData[]> => {
   }));
 };
 
-export const reportRepair = async (payload: Record<string, unknown>) => {
-  return postAction('reportRepair', payload);
+export const reportRepair = async (payload: ReportRepairPayload): Promise<ReportRepairResponse> => {
+  return postAction('reportRepair', payload) as Promise<ReportRepairResponse>;
 };
 
 export const approveRepair = async (payload: { rowId: string; deviceId: string; newStatus: string; approver?: string; note?: string; imageContent?: string; imageName?: string; imageMimeType?: string }) => {

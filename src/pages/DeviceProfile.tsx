@@ -655,10 +655,15 @@ const DeviceProfile: React.FC = () => {
                 />
               </div>
               <div style={{ gridColumn: '1 / -1', marginTop: '8px' }}>
-                <FileUploader 
-                  selectedFile={selectedFile}
-                  onFileSelect={setSelectedFile}
+                <FileUploader
+                  files={selectedFile ? [selectedFile] : []}
+                  onFilesChange={files => setSelectedFile(files[0] || null)}
+                  accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png"
+                  maxSizeMB={10}
+                  maxTotalSizeMB={10}
+                  maxFiles={1}
                   label={docModalMode === 'edit' ? 'Thay thế file tài liệu (để trống nếu giữ nguyên file cũ)' : 'File tài liệu đính kèm'}
+                  helperText="Hỗ trợ PDF, Word, Excel, JPG và PNG"
                 />
               </div>
             </div>

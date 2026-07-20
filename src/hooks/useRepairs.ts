@@ -1,4 +1,4 @@
-import { useApiResource } from './useApiResource';
+import { useApiResource, type ApiResourceMutation } from './useApiResource';
 import { fetchRepairs, type RepairData } from '../services/api';
 
 export interface UseRepairsReturn {
@@ -8,7 +8,7 @@ export interface UseRepairsReturn {
   /** Force a fresh fetch, ignoring the cache. Updates all consumers. */
   refetch: () => Promise<void>;
   /** Optimistic update: replace cached data without a network call. */
-  mutate: (data: RepairData[]) => void;
+  mutate: (mutation: ApiResourceMutation<RepairData>) => void;
 }
 
 export function useRepairs(): UseRepairsReturn {

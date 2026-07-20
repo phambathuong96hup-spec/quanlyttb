@@ -7,6 +7,8 @@ interface CacheState<T> {
   timestamp: number;
 }
 
+export type ApiResourceMutation<T> = T[] | ((currentData: T[]) => T[]);
+
 // Global maps for registry (to keep static state in the module scope)
 const cacheRegistry = new Map<string, CacheState<unknown>>();
 const promiseRegistry = new Map<string, Promise<unknown[]>>();
@@ -127,7 +129,9 @@ export function useApiResource<T>(
     }
   }, [key, loadData]);
 
-  const mutate = useCallback((newData: T[]) => {
+  const mutate = useCallback((mutation: ApiResourceMutation<T>) => {
+    const currentData = (cacheRegistry.get(key)?.data as T[] | undefined) ?? [];
+    const newData = typeof mutation === 'function' ? mutation(currentData) : mutation;
     cacheRegistry.set(key, { data: newData, timestamp: Date.now() });
     notifySubscribers(key);
   }, [key]);

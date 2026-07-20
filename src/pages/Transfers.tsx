@@ -625,11 +625,15 @@ const Transfers: React.FC<TransfersProps> = ({ defaultTab = 'requests' }) => {
                 <textarea className="input-field" value={reason} onChange={e => setReason(e.target.value)} placeholder="Lý do, tình trạng bàn giao, phụ kiện đi kèm..." />
               </div>
               <div style={{ marginBottom: '16px' }}>
-                <FileUploader 
-                  selectedFile={selectedFile}
-                  onFileSelect={setSelectedFile}
+                <FileUploader
+                  files={selectedFile ? [selectedFile] : []}
+                  onFilesChange={files => setSelectedFile(files[0] || null)}
+                  accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
                   label="Ảnh minh chứng tình trạng bàn giao (tùy chọn)"
+                  helperText="Hỗ trợ ảnh JPG, PNG và WebP"
                   maxSizeMB={5}
+                  maxTotalSizeMB={5}
+                  maxFiles={1}
                 />
               </div>
               {message && (
@@ -841,11 +845,15 @@ const Transfers: React.FC<TransfersProps> = ({ defaultTab = 'requests' }) => {
               />
             </div>
             
-            <FileUploader 
-              selectedFile={receiveFile}
-              onFileSelect={setReceiveFile}
+            <FileUploader
+              files={receiveFile ? [receiveFile] : []}
+              onFilesChange={files => setReceiveFile(files[0] || null)}
+              accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
               label="Ảnh minh chứng lúc nhận (tùy chọn)"
+              helperText="Hỗ trợ ảnh JPG, PNG và WebP"
               maxSizeMB={5}
+              maxTotalSizeMB={5}
+              maxFiles={1}
             />
             
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '16px' }}>

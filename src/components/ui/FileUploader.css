@@ -1,0 +1,216 @@
+.file-uploader {
+  width: 100%;
+}
+
+.file-uploader-label {
+  display: block;
+  margin-bottom: 7px;
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  font-weight: 760;
+}
+
+.file-uploader-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.file-uploader-dropzone {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 108px;
+  padding: 16px;
+  border: 1px dashed #9eb7bf;
+  border-radius: 8px;
+  background: var(--surface-50);
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-align: center;
+  transition: border-color var(--transition-fast), background-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.file-uploader-dropzone:hover,
+.file-uploader-dropzone.is-dragging {
+  border-color: var(--primary);
+  background: #eefaf6;
+  box-shadow: inset 0 0 0 1px rgba(15, 118, 110, 0.16);
+}
+
+.file-uploader-input:focus-visible + .file-uploader-dropzone {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.file-uploader-upload-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 38px;
+  width: 38px;
+  height: 38px;
+  border: 1px solid #b8d8d1;
+  border-radius: 7px;
+  background: #e7f8f3;
+  color: var(--primary);
+}
+
+.file-uploader-action {
+  color: var(--primary-dark);
+  font-size: 0.84rem;
+  font-weight: 780;
+}
+
+.file-uploader-drop-copy {
+  font-size: 0.8rem;
+}
+
+.file-uploader-helper {
+  display: block;
+  margin-top: 5px;
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+
+.file-uploader-status {
+  min-height: 20px;
+  margin-top: 6px;
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-weight: 650;
+}
+
+.file-uploader-errors {
+  display: grid;
+  gap: 4px;
+  margin: 6px 0 0;
+  padding: 9px 12px 9px 28px;
+  border: 1px solid #fecaca;
+  border-radius: 7px;
+  background: #fff7f7;
+  color: #b42318;
+  font-size: 0.74rem;
+  list-style: disc;
+}
+
+.file-uploader-file-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.file-uploader-file {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) 30px;
+  gap: 9px;
+  align-items: center;
+  min-width: 0;
+  min-height: 64px;
+  padding: 7px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #ffffff;
+  content-visibility: auto;
+  contain-intrinsic-size: 64px;
+}
+
+.file-uploader-thumbnail,
+.file-uploader-file-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 6px;
+}
+
+.file-uploader-thumbnail {
+  display: block;
+  object-fit: cover;
+  background: #eef3f5;
+}
+
+.file-uploader-file-icon {
+  display: grid;
+  place-items: center;
+  background: #e7f8f3;
+  color: var(--primary);
+}
+
+.file-uploader-file-icon.is-video {
+  background: #eef2ff;
+  color: #4f46e5;
+}
+
+.file-uploader-file-copy {
+  min-width: 0;
+}
+
+.file-uploader-file-copy strong,
+.file-uploader-file-copy small {
+  display: block;
+}
+
+.file-uploader-file-copy strong {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 0.75rem;
+  font-weight: 730;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-uploader-file-copy small {
+  margin-top: 3px;
+  color: var(--text-secondary);
+  font-size: 0.67rem;
+}
+
+.file-uploader-remove {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 6px;
+  background: #fff1f2;
+  color: var(--danger);
+}
+
+.file-uploader-remove:hover:not(:disabled) {
+  background: #fee2e2;
+}
+
+.file-uploader.is-disabled {
+  opacity: 0.64;
+}
+
+.file-uploader.is-disabled .file-uploader-dropzone,
+.file-uploader.is-disabled .file-uploader-remove {
+  cursor: not-allowed;
+}
+
+@media (max-width: 560px) {
+  .file-uploader-dropzone {
+    align-items: center;
+    flex-direction: column;
+  }
+
+  .file-uploader-file-list {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .file-uploader-dropzone {
+    transition: none;
+  }
+}

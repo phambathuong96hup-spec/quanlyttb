@@ -8,7 +8,7 @@ test('Apps Script email notifications include evidence links and admin recipient
   assert.match(source, /function adminEmails_/);
   assert.match(source, /function evidenceLinkRow_/);
   assert.match(source, /recipients\s*=\s*recipients\.concat\(adminEmails_\(\)\)/);
-  assert.match(source, /evidenceLinkRow_\('Ảnh minh chứng', imageUrl\)/);
+  assert.match(source, /evidenceLinksRows_\(evidenceUpload\.files\)/);
   assert.match(source, /evidenceLinkRow_\('Ảnh hoàn thành\/xử lý', imageUrl\)/);
   assert.match(source, /evidenceUrl:\s*imageUrl/);
   assert.match(source, /type:\s*'cancelled'/);

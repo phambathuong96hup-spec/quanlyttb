@@ -3,7 +3,9 @@ export interface EvidenceLink {
   url: string;
 }
 
-const evidenceLinePattern = /^\s*\[([^\]]*Ảnh[^\]]*)\]\s*:\s*(https?:\/\/\S+)\s*$/i;
+const evidenceLinePattern = /^\s*\[([^\]]*(?:Ảnh|Video|Minh chứng)[^\]]*)\]\s*:\s*(https?:\/\/\S+)\s*$/i;
+
+export const isVideoEvidenceLabel = (label: string) => /^video(?:\s|$)/i.test(label.trim());
 
 export const extractEvidenceLinks = (text: unknown): EvidenceLink[] => {
   return String(text ?? '')

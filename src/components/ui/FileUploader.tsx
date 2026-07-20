@@ -1,103 +1,204 @@
-import React, { useId } from 'react';
-import { Upload, X } from 'lucide-react';
+import React, { memo, useEffect, useId, useState } from 'react';
+import { FileText, FileVideo, Images, Upload, X } from 'lucide-react';
+import {
+  DEFAULT_REPAIR_ATTACHMENT_LIMITS,
+  REPAIR_ATTACHMENT_ACCEPT,
+  attachmentKey,
+  formatAttachmentSize,
+  getAttachmentMimeType,
+  getTotalAttachmentSize,
+  mergeAttachmentSelection,
+} from '../../utils/attachmentUtils';
+import './FileUploader.css';
 
 interface FileUploaderProps {
-  selectedFile: File | null;
-  onFileSelect: (file: File | null) => void;
+  files: File[];
+  onFilesChange: (files: File[]) => void;
   accept?: string;
   maxSizeMB?: number;
+  maxTotalSizeMB?: number;
+  maxFiles?: number;
+  multiple?: boolean;
+  disabled?: boolean;
   label?: string;
   helperText?: string;
 }
 
-export const FileUploader: React.FC<FileUploaderProps> = ({
-  selectedFile,
-  onFileSelect,
-  accept = '.pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png',
-  maxSizeMB = 10,
-  label = 'File tài liệu đính kèm',
-  helperText = 'Hỗ trợ PDF, Word, Excel, JPG, PNG',
-}) => {
-  const inputId = useId();
+const AttachmentThumbnail = memo(({ file }: { file: File }) => {
+  const isImage = getAttachmentMimeType(file).startsWith('image/');
+  const [previewUrl] = useState(() => isImage ? URL.createObjectURL(file) : '');
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const file = e.target.files[0];
-      if (file.size > maxSizeMB * 1024 * 1024) {
-        alert(`Kích thước file quá lớn (tối đa ${maxSizeMB}MB).`);
-        e.target.value = ''; // Reset input
-        return;
-      }
-      onFileSelect(file);
-    }
-  };
+  useEffect(() => () => {
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+  }, [previewUrl]);
 
-  const handleClear = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    onFileSelect(null);
-    const inputElement = document.getElementById(inputId) as HTMLInputElement;
-    if (inputElement) {
-      inputElement.value = '';
-    }
-  };
+  if (!isImage) {
+    return (
+      <span className="file-uploader-file-icon is-video" aria-hidden="true">
+        <FileVideo size={20} />
+      </span>
+    );
+  }
 
   return (
-    <div>
-      {label && (
-        <label style={{ display: 'block', fontWeight: 760, marginBottom: '7px', fontSize: '0.82rem', color: 'var(--text-primary)' }}>
-          {label}
-        </label>
-      )}
-      <div 
-        style={{ 
-          border: '1px dashed var(--border)', 
-          borderRadius: '8px', 
-          padding: '16px', 
-          textAlign: 'center', 
-          cursor: 'pointer',
-          background: 'var(--surface-50)',
-          position: 'relative',
-          transition: 'all 0.2s ease-in-out'
+    <img
+      className="file-uploader-thumbnail"
+      src={previewUrl}
+      alt={`Xem trước ${file.name}`}
+      width={48}
+      height={48}
+      loading="lazy"
+      decoding="async"
+    />
+  );
+});
+
+AttachmentThumbnail.displayName = 'AttachmentThumbnail';
+
+const attachmentKindLabel = (file: File) => {
+  const mimeType = getAttachmentMimeType(file);
+  if (mimeType.startsWith('video/')) return 'Video';
+  if (mimeType.startsWith('image/')) return 'Ảnh';
+  return 'Tài liệu';
+};
+
+export const FileUploader: React.FC<FileUploaderProps> = ({
+  files,
+  onFilesChange,
+  accept = REPAIR_ATTACHMENT_ACCEPT,
+  maxSizeMB = DEFAULT_REPAIR_ATTACHMENT_LIMITS.maxSizeMB,
+  maxTotalSizeMB = DEFAULT_REPAIR_ATTACHMENT_LIMITS.maxTotalSizeMB,
+  maxFiles = 1,
+  multiple = false,
+  disabled = false,
+  label = 'Tệp minh chứng (tùy chọn)',
+  helperText = 'Hỗ trợ ảnh JPG, PNG, WebP và video MP4, MOV, WebM',
+}) => {
+  const inputId = useId();
+  const labelId = `${inputId}-label`;
+  const actionId = `${inputId}-action`;
+  const helperId = `${inputId}-helper`;
+  const errorId = `${inputId}-error`;
+  const [errors, setErrors] = useState<string[]>([]);
+  const [isDragging, setIsDragging] = useState(false);
+
+  const selectFiles = (incomingFiles: File[]) => {
+    if (disabled || incomingFiles.length === 0) return;
+    const baseFiles = multiple ? files : [];
+    const candidates = multiple ? incomingFiles : incomingFiles.slice(0, 1);
+    const result = mergeAttachmentSelection(baseFiles, candidates, {
+      accept,
+      maxFiles: multiple ? maxFiles : 1,
+      maxSizeMB,
+      maxTotalSizeMB,
+    });
+    setErrors(result.errors);
+    onFilesChange(result.files);
+  };
+
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    selectFiles(Array.from(event.target.files || []));
+    event.target.value = '';
+  };
+
+  const handleDrop = (event: React.DragEvent<HTMLLabelElement>) => {
+    event.preventDefault();
+    setIsDragging(false);
+    selectFiles(Array.from(event.dataTransfer.files || []));
+  };
+
+  const removeFile = (file: File) => {
+    onFilesChange(files.filter(item => attachmentKey(item) !== attachmentKey(file)));
+    setErrors([]);
+  };
+
+  const totalSize = getTotalAttachmentSize(files);
+
+  return (
+    <div
+      className={`file-uploader ${disabled ? 'is-disabled' : ''}`}
+      aria-labelledby={label ? labelId : undefined}
+      aria-label={label ? undefined : 'Tải tệp minh chứng'}
+    >
+      {label ? <span id={labelId} className="file-uploader-label">{label}</span> : null}
+      <input
+        className="file-uploader-input"
+        type="file"
+        id={inputId}
+        onChange={handleFileChange}
+        accept={accept}
+        multiple={multiple}
+        disabled={disabled}
+        aria-labelledby={label ? `${labelId} ${actionId}` : actionId}
+        aria-describedby={`${helperId}${errors.length > 0 ? ` ${errorId}` : ''}`}
+        aria-invalid={errors.length > 0 || undefined}
+      />
+      <label
+        className={`file-uploader-dropzone ${isDragging ? 'is-dragging' : ''}`}
+        htmlFor={inputId}
+        onDragEnter={event => {
+          event.preventDefault();
+          if (!disabled) setIsDragging(true);
         }}
-        onClick={() => document.getElementById(inputId)?.click()}
+        onDragOver={event => event.preventDefault()}
+        onDragLeave={() => setIsDragging(false)}
+        onDrop={handleDrop}
       >
-        <input 
-          type="file" 
-          id={inputId} 
-          style={{ display: 'none' }} 
-          onChange={handleFileChange}
-          accept={accept}
-        />
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '7px', color: 'var(--text-secondary)' }}>
-          <Upload size={24} style={{ color: 'var(--primary)' }} />
-          {selectedFile ? (
-            <div>
-              <span style={{ fontWeight: '700', color: 'var(--text-primary)' }}>{selectedFile.name}</span>
-              <span style={{ fontSize: '0.8rem', display: 'block', marginTop: '2px' }}>
-                ({(selectedFile.size / (1024 * 1024)).toFixed(2)} MB)
-              </span>
-            </div>
-          ) : (
-            <div>
-              <span style={{ fontWeight: 760, color: 'var(--primary)' }}>Nhấp để chọn file</span> hoặc kéo thả file vào đây
-              <span style={{ fontSize: '0.8rem', display: 'block', marginTop: '2px', color: 'var(--text-secondary)' }}>
-                {helperText} (Tối đa {maxSizeMB}MB)
-              </span>
-            </div>
-          )}
-        </div>
+        <span className="file-uploader-upload-icon" aria-hidden="true">
+          {multiple ? <Images size={24} /> : <Upload size={24} />}
+        </span>
+        <span id={actionId} className="file-uploader-action">
+          {multiple ? 'Chọn nhiều ảnh hoặc video' : 'Chọn tệp minh chứng'}
+        </span>
+        <span className="file-uploader-drop-copy">hoặc kéo thả vào đây</span>
+      </label>
+      <span id={helperId} className="file-uploader-helper">
+        {helperText}. Tối đa {maxFiles} tệp, {maxSizeMB} MB/tệp và {maxTotalSizeMB} MB tổng cộng.
+      </span>
+
+      <div className="file-uploader-status" aria-live="polite">
+        {files.length > 0
+          ? `Đã chọn ${files.length}/${maxFiles} tệp · ${formatAttachmentSize(totalSize)}`
+          : 'Chưa chọn tệp minh chứng.'}
       </div>
-      {selectedFile && (
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '6px' }}>
-          <button 
-            type="button" 
-            onClick={handleClear}
-            style={{ background: 'none', border: 'none', color: 'var(--danger)', fontSize: '0.85rem', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}
-          >
-            <X size={14} /> Xóa file đã chọn
-          </button>
-        </div>
-      )}
+
+      {errors.length > 0 ? (
+        <ul id={errorId} className="file-uploader-errors" role="alert">
+          {errors.map((error, index) => <li key={`${error}-${index}`}>{error}</li>)}
+        </ul>
+      ) : null}
+
+      {files.length > 0 ? (
+        <ul className="file-uploader-file-list" aria-label="Các tệp đã chọn">
+          {files.map(file => (
+            <li key={attachmentKey(file)} className="file-uploader-file">
+              {getAttachmentMimeType(file).startsWith('video/')
+                ? <AttachmentThumbnail file={file} />
+                : getAttachmentMimeType(file).startsWith('image/')
+                  ? <AttachmentThumbnail file={file} />
+                  : (
+                    <span className="file-uploader-file-icon" aria-hidden="true">
+                      <FileText size={20} />
+                    </span>
+                  )}
+              <span className="file-uploader-file-copy">
+                <strong title={file.name}>{file.name}</strong>
+                <small>{formatAttachmentSize(file.size)} · {attachmentKindLabel(file)}</small>
+              </span>
+              <button
+                type="button"
+                className="file-uploader-remove"
+                onClick={() => removeFile(file)}
+                disabled={disabled}
+                aria-label={`Xóa ${file.name}`}
+                title={`Xóa ${file.name}`}
+              >
+                <X size={16} aria-hidden="true" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
     </div>
   );
 };

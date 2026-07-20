@@ -56,7 +56,13 @@ const actionFromRoute = (route: Route) => {
   }
 };
 
-const mockGas = async (page: Page, options: { delayedHistoryMs?: number; invalidSession?: boolean } = {}) => {
+interface MockGasOptions {
+  delayedHistoryMs?: number;
+  invalidSession?: boolean;
+  onReportRepair?: (payload: Record<string, unknown>) => void;
+}
+
+const mockGas = async (page: Page, options: MockGasOptions = {}) => {
   await page.route('**/macros/s/**/exec*', async route => {
     const action = actionFromRoute(route);
     if (options.invalidSession && action !== 'login') {
@@ -78,6 +84,28 @@ const mockGas = async (page: Page, options: { delayedHistoryMs?: number; invalid
     }
     if (action === 'getInventoryRuns') {
       await json(route, { success: true, data: [] });
+      return;
+    }
+    if (action === 'reportRepair') {
+      const requestBody = route.request().postDataJSON() as { payload?: Record<string, unknown> };
+      const payload = requestBody.payload || {};
+      options.onReportRepair?.(payload);
+      const attachments = Array.isArray(payload.attachments) ? payload.attachments : [];
+      const attachmentCount = attachments.length + (payload.imageContent ? 1 : 0);
+      await json(route, {
+        success: true,
+        message: 'Đã ghi nhận báo hỏng.',
+        attachmentCount,
+        attachmentFailures: [],
+        repair: {
+          rowId: '2026-07-20T10:00:00.000Z',
+          deviceId: payload.deviceId,
+          userName: payload.userName,
+          userEmail: payload.userEmail,
+          description: payload.description,
+          status: 'Chờ duyệt',
+        },
+      });
       return;
     }
     await json(route, { success: true, data: [] });
@@ -122,6 +150,36 @@ test('transfer creation keeps the device type placeholder until the user chooses
 
   await expect(deviceType).toHaveValue('');
   await expect(page.getByRole('button', { name: /Gửi yêu cầu/ })).toBeDisabled();
+});
+
+test('repair request sends multiple images and videos in one compact payload', async ({ page }) => {
+  let submittedPayload: Record<string, unknown> | undefined;
+  await seedSession(page, validSession);
+  await mockGas(page, { onReportRepair: payload => { submittedPayload = payload; } });
+
+  await page.goto('/requests?type=repair');
+
+  const attachmentInput = page.locator('input[type="file"][multiple]');
+  await expect(attachmentInput).toHaveCount(1);
+  await attachmentInput.setInputFiles([
+    { name: 'hien-trang.jpg', mimeType: 'image/jpeg', buffer: Buffer.from('qa-image') },
+    { name: 'van-hanh.mp4', mimeType: 'video/mp4', buffer: Buffer.from('qa-video') },
+  ]);
+
+  await expect(page.locator('.file-uploader-file')).toHaveCount(2);
+  await expect(page.locator('.file-uploader-status')).toContainText('Đã chọn 2/8 tệp');
+  await page.getByPlaceholder(/Mô tả chi tiết biểu hiện lỗi/).fill('Máy phát tiếng ồn bất thường khi khởi động.');
+  await page.getByRole('button', { name: 'Gửi yêu cầu sửa chữa' }).click();
+
+  await expect.poll(() => submittedPayload).toBeTruthy();
+  const attachments = submittedPayload?.attachments as Array<Record<string, unknown>>;
+  expect(submittedPayload?.imageName).toBe('hien-trang.jpg');
+  expect(submittedPayload?.imageMimeType).toBe('image/jpeg');
+  expect(submittedPayload?.imageContent).toBeTruthy();
+  expect(attachments).toHaveLength(1);
+  expect(attachments[0]).toMatchObject({ name: 'van-hanh.mp4', mimeType: 'video/mp4' });
+  expect(attachments[0].content).not.toBe(submittedPayload?.imageContent);
+  await expect(page.locator('.request-subtab.active')).toContainText('Tiếp nhận yêu cầu');
 });
 
 test('norms lookup separates departments and supports search and pagination', async ({ page }) => {

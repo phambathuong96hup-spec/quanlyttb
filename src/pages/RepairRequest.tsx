@@ -14,6 +14,14 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { removeVietnameseTones, matchSmartSearch } from '../utils/stringUtils';
 import { stripEvidenceLinks } from '../utils/evidenceUtils';
+import {
+  DEFAULT_REPAIR_ATTACHMENT_LIMITS,
+  MAX_REPAIR_ATTACHMENTS,
+  REPAIR_ATTACHMENT_ACCEPT,
+  buildAttachmentPayloads,
+  readFileAsBase64,
+  type RepairAttachmentPayload,
+} from '../utils/attachmentUtils';
 import { EvidenceLinks } from '../components/EvidenceLinks';
 import './RepairRequest.css';
 import {
@@ -49,21 +57,10 @@ const RepairRequest: React.FC<RepairRequestProps> = ({ defaultTab = 'requests' }
   const [priority, setPriority] = useState<'normal' | 'urgent'>('normal');
   const [isScanning, setIsScanning] = useState(false);
   const [message, setMessage] = useState('');
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [statusFile, setStatusFile] = useState<File | null>(null);
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
-
-  const readFileAsBase64 = (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const base64String = (reader.result as string).split(',')[1];
-        resolve(base64String);
-      };
-      reader.onerror = error => reject(error);
-      reader.readAsDataURL(file);
-    });
-  };
+  const [submitStage, setSubmitStage] = useState<'idle' | 'preparing' | 'sending'>('idle');
 
   // ===== Repairs data =====
   const { repairs, isLoading: isRepairsLoading, refetch: refetchRepairs, mutate: mutateRepairs } = useRepairs();
@@ -219,45 +216,71 @@ const RepairRequest: React.FC<RepairRequestProps> = ({ defaultTab = 'requests' }
       return;
     }
     setIsSubmitting(true);
+    setMessage('');
+    setSubmitStage(selectedFiles.length > 0 ? 'preparing' : 'sending');
 
-    let imageContent = '';
-    let imageName = '';
-    let imageMimeType = '';
+    let attachments: RepairAttachmentPayload[] = [];
+    let isPreparingAttachments = selectedFiles.length > 0;
 
-    if (selectedFile) {
-      try {
-        imageContent = await readFileAsBase64(selectedFile);
-        imageName = selectedFile.name;
-        imageMimeType = selectedFile.type;
-      } catch {
-        toast.error('Lỗi khi đọc file đính kèm.');
-        setIsSubmitting(false);
-        return;
+    try {
+      if (selectedFiles.length > 0) {
+        attachments = await buildAttachmentPayloads(selectedFiles);
       }
-    }
+      isPreparingAttachments = false;
 
-    const response = await reportRepair({
-      deviceId: priority === 'urgent' ? `[KHẨN] ${deviceId}` : deviceId,
-      userName,
-      userEmail,
-      description,
-      imageContent,
-      imageName,
-      imageMimeType,
-    });
+      setSubmitStage('sending');
+      const primaryAttachment = attachments[0];
+      const submittedDeviceId = priority === 'urgent' ? `[KHẨN] ${deviceId}` : deviceId;
+      const response = await reportRepair({
+        deviceId: submittedDeviceId,
+        userName,
+        userEmail,
+        description,
+        // Tệp đầu giữ giao thức cũ; các tệp còn lại dùng mảng mới. Payload không bị lặp Base64.
+        attachments: attachments.slice(1),
+        ...(primaryAttachment ? {
+          imageContent: primaryAttachment.content,
+          imageName: primaryAttachment.name,
+          imageMimeType: primaryAttachment.mimeType,
+        } : {}),
+      });
 
-    setIsSubmitting(false);
-
-    if (response.success) {
-      toast.success('Yêu cầu báo hỏng đã được gửi thành công!');
-      setDescription('');
-      setPriority('normal');
-      setSelectedFile(null);
-      if (devices.length > 0) setDeviceId(devices[0].id);
-      await loadData();
-      setTimeout(() => setActiveTab('requests'), 1500);
-    } else {
-      toast.error('Có lỗi xảy ra: ' + (response.message || 'Lỗi không xác định'));
+      if (response.success) {
+        toast.success('Yêu cầu báo hỏng đã được gửi thành công!');
+        if (attachments.length > 1 && response.attachmentCount === undefined) {
+          toast.warning('Máy chủ cũ chỉ nhận tệp đầu tiên. Cần cập nhật Apps Script để nhận toàn bộ ảnh/video.');
+        }
+        if (response.attachmentFailures?.length) {
+          toast.warning(`Có ${response.attachmentFailures.length} tệp chưa tải được lên Drive.`);
+        }
+        setDescription('');
+        setPriority('normal');
+        setSelectedFiles([]);
+        if (devices.length > 0) setDeviceId(devices[0].id);
+        if (response.repair) {
+          const optimisticRepair = response.repair;
+          mutateRepairs(currentRepairs => {
+            const existingIndex = currentRepairs.findIndex(repair => repair.rowId === optimisticRepair.rowId);
+            if (existingIndex < 0) return [...currentRepairs, optimisticRepair];
+            return currentRepairs.map((repair, index) => index === existingIndex ? optimisticRepair : repair);
+          });
+        } else {
+          // Máy chủ cũ chưa trả bản ghi vừa tạo; chỉ trường hợp này mới cần tải lại danh sách.
+          void refetchRepairs();
+        }
+        setActiveTab('requests');
+      } else {
+        toast.error('Có lỗi xảy ra: ' + (response.message || 'Lỗi không xác định'));
+      }
+    } catch {
+      toast.error(
+        isPreparingAttachments
+          ? 'Không thể đọc tệp đính kèm. Vui lòng chọn lại tệp và thử lại.'
+          : 'Không thể gửi yêu cầu. Vui lòng kiểm tra kết nối và thử lại.'
+      );
+    } finally {
+      setIsSubmitting(false);
+      setSubmitStage('idle');
     }
   };
 
@@ -549,11 +572,17 @@ const RepairRequest: React.FC<RepairRequestProps> = ({ defaultTab = 'requests' }
               </div>
 
               <div className="input-group">
-                <FileUploader 
-                  selectedFile={selectedFile}
-                  onFileSelect={setSelectedFile}
-                  label="Ảnh minh chứng hỏng hóc (tùy chọn)"
-                  maxSizeMB={5}
+                <FileUploader
+                  files={selectedFiles}
+                  onFilesChange={setSelectedFiles}
+                  accept={REPAIR_ATTACHMENT_ACCEPT}
+                  label="Ảnh và video minh chứng (tùy chọn)"
+                  helperText="Có thể chọn nhiều ảnh JPG, PNG, WebP và video MP4, MOV, WebM cùng lúc"
+                  maxSizeMB={DEFAULT_REPAIR_ATTACHMENT_LIMITS.maxSizeMB}
+                  maxTotalSizeMB={DEFAULT_REPAIR_ATTACHMENT_LIMITS.maxTotalSizeMB}
+                  maxFiles={MAX_REPAIR_ATTACHMENTS}
+                  multiple
+                  disabled={isSubmitting}
                 />
               </div>
 
@@ -586,8 +615,15 @@ const RepairRequest: React.FC<RepairRequestProps> = ({ defaultTab = 'requests' }
                 </div>
               )}
 
+              <div className="request-submit-status" aria-live="polite">
+                {submitStage === 'preparing'
+                  ? `Đang chuẩn bị ${selectedFiles.length} tệp minh chứng…`
+                  : submitStage === 'sending'
+                    ? 'Đang gửi yêu cầu, vui lòng chờ…'
+                    : ''}
+              </div>
               <Button type="submit" variant="primary" className="submit-btn request-submit-btn" icon={isSubmitting ? <Loader2 size={20} style={{ animation: 'spin 1s linear infinite' }} /> : <Send size={20} />} disabled={isSubmitting}>
-                {isSubmitting ? 'Đang gửi...' : 'Gửi yêu cầu sửa chữa'}
+                {submitStage === 'preparing' ? 'Đang chuẩn bị tệp...' : isSubmitting ? 'Đang gửi...' : 'Gửi yêu cầu sửa chữa'}
               </Button>
             </form>
           </CardBody>
@@ -799,11 +835,16 @@ const RepairRequest: React.FC<RepairRequestProps> = ({ defaultTab = 'requests' }
             <p style={{ margin: 0 }}>Xác nhận cập nhật trạng thái thiết bị <strong>{pendingStatusChange.repair.deviceId}</strong> thành <Badge variant="primary">{pendingStatusChange.newStatus}</Badge>?</p>
             
             {(pendingStatusChange.newStatus.includes('sửa xong') || pendingStatusChange.newStatus.includes('hoàn thành')) && (
-              <FileUploader 
-                selectedFile={statusFile}
-                onFileSelect={setStatusFile}
+              <FileUploader
+                files={statusFile ? [statusFile] : []}
+                onFilesChange={files => setStatusFile(files[0] || null)}
+                accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
                 label="Ảnh minh chứng (tùy chọn)"
+                helperText="Hỗ trợ ảnh JPG, PNG và WebP"
                 maxSizeMB={5}
+                maxTotalSizeMB={5}
+                maxFiles={1}
+                disabled={isUpdatingStatus}
               />
             )}
             
