@@ -8,6 +8,7 @@ test('GitHub Pages workflow builds Vite app for the repository subpath', () => {
   assert.match(workflow, /npm ci/);
   assert.match(workflow, /npm run build/);
   assert.match(workflow, /VITE_BASE_PATH:\s*\/quanlyttb\//);
+  assert.match(workflow, /VITE_AI_API_URL:\s*https:\/\/pbthuong-ai\.hf\.space/);
   assert.match(workflow, /cp dist\/index\.html dist\/404\.html/);
   assert.match(workflow, /actions\/upload-pages-artifact@v3/);
   assert.match(workflow, /actions\/deploy-pages@v4/);

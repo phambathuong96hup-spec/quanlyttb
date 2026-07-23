@@ -35,6 +35,7 @@ jobs:
         run: npm run build
         env:
           VITE_BASE_PATH: /quanlyttb/
+          VITE_AI_API_URL: https://pbthuong-ai.hf.space
 
       - name: Add SPA fallback
         run: cp dist/index.html dist/404.html
