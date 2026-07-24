@@ -439,6 +439,35 @@
   font-size: 0.78rem;
 }
 
+.norms-table.is-compact {
+  width: 100%;
+  min-width: 0;
+  table-layout: fixed;
+}
+
+.norms-table.is-compact .norms-column-a {
+  width: 25%;
+}
+
+.norms-table.is-compact .norms-column-b {
+  width: 38%;
+}
+
+.norms-table.is-compact .norms-column-c,
+.norms-table.is-compact .norms-column-d,
+.norms-table.is-compact .norms-column-e {
+  width: 9%;
+}
+
+.norms-table.is-compact .norms-primary-cell {
+  min-width: 0;
+}
+
+.norms-table.is-compact .norms-column-a,
+.norms-table.is-compact .norms-column-b {
+  overflow-wrap: break-word;
+}
+
 .norms-table caption {
   position: absolute;
   width: 1px;

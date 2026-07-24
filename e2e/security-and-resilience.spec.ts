@@ -211,3 +211,18 @@ test('norms lookup separates departments and supports search and pagination', as
   await maternityDepartment.click();
   await expect(page.locator('.norms-data-warning')).toContainText('17');
 });
+
+test('norms lookup keeps common five-column sheets inside their ledger', async ({ page }) => {
+  await page.setViewportSize({ width: 1511, height: 783 });
+  await seedSession(page, validSession);
+  await mockGas(page);
+
+  await page.goto('/dinh-muc', { waitUntil: 'domcontentloaded' });
+
+  const tableFrame = page.locator('.norms-table-frame');
+  await tableFrame.waitFor({ state: 'visible', timeout: 20_000 });
+  await expect.poll(() => tableFrame.evaluate(element => (
+    element.scrollWidth - element.clientWidth
+  ))).toBeLessThanOrEqual(1);
+  await expect(page.getByRole('columnheader', { name: 'Cột E', exact: true })).toBeInViewport();
+});

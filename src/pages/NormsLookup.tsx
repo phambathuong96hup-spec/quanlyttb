@@ -296,7 +296,7 @@ const NormsLookup: React.FC = () => {
                   tabIndex={0}
                   aria-label={`Bảng định mức ${selectedDepartment.name}; có thể cuộn ngang và dọc`}
                 >
-                  <table className="norms-table">
+                  <table className={`norms-table ${selectedDepartment.columns.length <= 5 ? 'is-compact' : ''}`}>
                     <caption>
                       Định mức của {selectedDepartment.name}, các cột được giữ theo vị trí trong tệp Excel gốc.
                     </caption>
@@ -304,7 +304,9 @@ const NormsLookup: React.FC = () => {
                       <tr>
                         <th scope="col" className="norms-row-number-column">Hàng Excel</th>
                         {selectedDepartment.columns.map(column => (
-                          <th scope="col" key={column}>Cột {column}</th>
+                          <th scope="col" key={column} className={`norms-column-${column.toLowerCase()}`}>
+                            Cột {column}
+                          </th>
                         ))}
                       </tr>
                     </thead>
@@ -315,7 +317,10 @@ const NormsLookup: React.FC = () => {
                           {selectedDepartment.columns.map(column => {
                             const value = row.cells[column];
                             return (
-                              <td key={column} className={column === 'B' ? 'norms-primary-cell' : ''}>
+                              <td
+                                key={column}
+                                className={`norms-column-${column.toLowerCase()}${column === 'B' ? ' norms-primary-cell' : ''}`}
+                              >
                                 {value
                                   ? row.hasFormulaError && isNormFormulaError(value)
                                     ? <FormulaErrorValue value={value} />
