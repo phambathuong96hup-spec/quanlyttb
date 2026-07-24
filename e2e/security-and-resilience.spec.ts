@@ -224,5 +224,19 @@ test('norms lookup keeps common five-column sheets inside their ledger', async (
   await expect.poll(() => tableFrame.evaluate(element => (
     element.scrollWidth - element.clientWidth
   ))).toBeLessThanOrEqual(1);
-  await expect(page.getByRole('columnheader', { name: 'Cột E', exact: true })).toBeInViewport();
+  await expect(page.locator('.norms-table tbody tr').first().locator('td').last()).toBeInViewport();
+});
+
+test('norms lookup hides technical Excel column labels', async ({ page }) => {
+  await seedSession(page, validSession);
+  await mockGas(page);
+
+  await page.goto('/dinh-muc', { waitUntil: 'domcontentloaded' });
+
+  const table = page.locator('.norms-table');
+  await table.waitFor({ state: 'visible', timeout: 20_000 });
+  await expect(table.getByRole('columnheader', { name: 'Hàng Excel', exact: true })).not.toBeVisible();
+  await expect(table.getByRole('columnheader', { name: 'Cột A', exact: true })).not.toBeVisible();
+  await expect(table.locator('thead th')).toHaveCount(6);
+  await expect(table.locator('tbody tr').first()).toBeVisible();
 });

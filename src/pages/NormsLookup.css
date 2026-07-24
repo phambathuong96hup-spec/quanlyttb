@@ -503,6 +503,35 @@
   white-space: nowrap;
 }
 
+.norms-table .norms-technical-head,
+.norms-table .norms-technical-head tr,
+.norms-table .norms-technical-head th {
+  height: 0;
+}
+
+.norms-table .norms-technical-head th {
+  position: static;
+  min-height: 0;
+  padding: 0;
+  border-bottom: 0;
+  background: transparent;
+  font-size: 0;
+  line-height: 0;
+}
+
+.norms-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
 .norms-table .norms-row-number-column,
 .norms-table .norms-row-number {
   position: sticky;

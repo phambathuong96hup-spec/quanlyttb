@@ -300,12 +300,14 @@ const NormsLookup: React.FC = () => {
                     <caption>
                       Định mức của {selectedDepartment.name}, các cột được giữ theo vị trí trong tệp Excel gốc.
                     </caption>
-                    <thead>
+                    <thead className="norms-technical-head">
                       <tr>
-                        <th scope="col" className="norms-row-number-column">Hàng Excel</th>
+                        <th scope="col" className="norms-row-number-column">
+                          <span className="norms-visually-hidden">Hàng Excel</span>
+                        </th>
                         {selectedDepartment.columns.map(column => (
                           <th scope="col" key={column} className={`norms-column-${column.toLowerCase()}`}>
-                            Cột {column}
+                            <span className="norms-visually-hidden">Cột {column}</span>
                           </th>
                         ))}
                       </tr>
