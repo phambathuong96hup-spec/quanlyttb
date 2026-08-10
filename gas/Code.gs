@@ -337,12 +337,8 @@ function login_(payload) {
     return { success: false, message: 'Hệ thống đăng nhập chưa được cấu hình an toàn. Vui lòng liên hệ quản trị viên.' };
   }
 
-  const user = getUserRows_().find(u => {
-    const account = getUserField_(u, ['Tên đăng nhập', 'Ten dang nhap', 'Username', 'Tài khoản', 'Tai khoan', 'username']);
-    const email = getUserField_(u, ['Email', 'email']);
-    return normalize_(account) === normalize_(username) || normalize_(email) === normalize_(username);
-  });
-  const rateIdentity = user ? userUsername_(user) : username;
+  let user = findLoginUser_(getUserRows_(), username);
+  let rateIdentity = user ? userUsername_(user) : username;
   const limit = loginRateLimit_(rateIdentity);
   if (!limit.allowed) {
     return { success: false, message: 'Tài khoản tạm khóa do đăng nhập sai nhiều lần. Vui lòng thử lại sau.' };
@@ -356,8 +352,22 @@ function login_(payload) {
     return { success: false, message: 'Tài khoản đã bị khóa.' };
   }
 
-  const storedPin = String(getUserField_(user, pinFieldKeys_()) || '').trim();
-  if (!verifyPin_(pin, storedPin)) {
+  let storedPin = String(getUserField_(user, pinFieldKeys_()) || '').trim();
+  let pinMatches = verifyPin_(pin, storedPin);
+  if (!pinMatches) {
+    const refreshedUser = findLoginUser_(getUserRows_(true), username);
+    if (refreshedUser) {
+      user = refreshedUser;
+      rateIdentity = userUsername_(user);
+      if (userStatus_(user) === 'inactive') {
+        return { success: false, message: 'Tài khoản đã bị khóa.' };
+      }
+      storedPin = String(getUserField_(user, pinFieldKeys_()) || '').trim();
+      pinMatches = verifyPin_(pin, storedPin);
+    }
+  }
+
+  if (!pinMatches) {
     recordLoginFailure_(rateIdentity);
     return { success: false, message: 'Tên đăng nhập hoặc mã PIN không chính xác.' };
   }
@@ -365,6 +375,14 @@ function login_(payload) {
   clearLoginFailures_(rateIdentity);
   const session = createSessionToken_(user);
   return { success: true, user: sanitizeUser_(user), token: session.token, expiresAt: session.expiresAt };
+}
+
+function findLoginUser_(users, username) {
+  return users.find(u => {
+    const account = getUserField_(u, ['Tên đăng nhập', 'Ten dang nhap', 'Username', 'Tài khoản', 'Tai khoan', 'username']);
+    const email = getUserField_(u, ['Email', 'email']);
+    return normalize_(account) === normalize_(username) || normalize_(email) === normalize_(username);
+  });
 }
 
 function pinFieldKeys_() {
@@ -2650,16 +2668,18 @@ function getRowsWithRowIndex_(sheetName) {
     }));
 }
 
-function getUserRows_() {
+function getUserRows_(forceRefresh) {
   const cache = CacheService.getScriptCache();
-  try {
-    const cached = cache.get(USER_ROWS_CACHE_KEY);
-    if (cached) {
-      const rows = JSON.parse(cached);
-      if (Array.isArray(rows)) return rows;
+  if (!forceRefresh) {
+    try {
+      const cached = cache.get(USER_ROWS_CACHE_KEY);
+      if (cached) {
+        const rows = JSON.parse(cached);
+        if (Array.isArray(rows)) return rows;
+      }
+    } catch (err) {
+      console.warn('getUserRows_ cache read failed', err);
     }
-  } catch (err) {
-    console.warn('getUserRows_ cache read failed', err);
   }
 
   const sheet = userSheet_();

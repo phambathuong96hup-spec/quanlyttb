@@ -97,6 +97,25 @@ test('user directory cache avoids repeated sheet reads without caching a plainte
   assert.equal(gas.verifyPin_('0000', first[0]['Mã PIN']), false);
 });
 
+test('login refreshes cached user data when a PIN was changed directly in the sheet', () => {
+  const gas = loadGas();
+  const cacheFlags: boolean[] = [];
+  gas.getUserRows_ = (forceRefresh = false) => {
+    cacheFlags.push(forceRefresh);
+    return [{
+      'Tên đăng nhập': 'sheet-user',
+      'Mã PIN': forceRefresh ? '8642' : gas.cachedPinValue_('2468'),
+      'Quyền hạn': 'user',
+      'Trạng thái': 'active',
+    }];
+  };
+
+  const result = gas.login_({ username: 'sheet-user', pin: '8642' });
+
+  assert.equal(result.success, true);
+  assert.deepEqual(cacheFlags, [false, true]);
+});
+
 test('updating a user invalidates the cached directory', () => {
   const gas = loadGas();
   let invalidations = 0;
