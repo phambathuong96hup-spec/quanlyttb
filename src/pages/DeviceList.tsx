@@ -1,7 +1,18 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Plus, Download, Printer, Search, Eye, Edit2, Save, Loader2, CheckCircle, AlertTriangle, Monitor, X, Wrench, ShieldAlert, CalendarX2, BookOpen } from 'lucide-react';
 import { Card, Button, Input, Table, TableHead, TableBody, TableRow, TableHeader, TableCell, Modal, useToast } from '../components/ui';
-import { addDevice, editDevice, type DeviceData } from '../services/api';
+import {
+  addDevice,
+  buildChangedDeviceMutationFields,
+  buildDeviceMutationFields,
+  createEmptyDeviceFieldValues,
+  DEVICE_SHEET_FIELDS,
+  deviceToSheetFieldValues,
+  editDevice,
+  type DeviceData,
+  type DeviceSheetFieldHeader,
+  type DeviceSheetFieldValues,
+} from '../services/api';
 import { useDevices } from '../hooks/useDevices';
 import { useAuth } from '../authContext';
 import { exportCsv } from '../utils/exportCsv';
@@ -21,21 +32,19 @@ import {
 } from '../utils/deviceStatus';
 import './Devices.css';
 
-interface DeviceFormData {
-  serial: string;
-  name: string;
-  department: string;
-  dateAdded: string;
-  notes: string;
-}
-
-const emptyForm: DeviceFormData = {
-  serial: '',
-  name: '',
-  department: '',
-  dateAdded: new Date().toLocaleDateString('vi-VN'),
-  notes: '',
-};
+const DEVICE_FORM_SECTIONS = [
+  { key: 'identity', title: 'Nhận dạng thiết bị', description: 'Mã quản lý, tên, đơn vị tính, số lượng, model và seri.' },
+  { key: 'usage', title: 'Bố trí và hiện trạng', description: 'Khoa/phòng đang sử dụng và tình trạng thực tế.' },
+  { key: 'origin', title: 'Nguồn gốc và tài chính', description: 'Thông tin sản xuất, nguồn kinh phí, phân loại và đơn vị cung ứng.' },
+  { key: 'notes', title: 'Ghi chú', description: 'Thông tin kỹ thuật hoặc nội dung cần lưu ý.' },
+  { key: 'system', title: 'Thông tin hệ thống', description: 'Các trường do hệ thống và quy trình đăng kiểm tự cập nhật.' },
+] as const;
+const DEVICE_FIELDS_BY_SECTION = new Map(
+  DEVICE_FORM_SECTIONS.map(section => [
+    section.key,
+    DEVICE_SHEET_FIELDS.filter(field => field.section === section.key),
+  ]),
+);
 
 const splitDeviceCodes = (value: unknown) => String(value || '')
   .split(';')
@@ -59,7 +68,11 @@ const DeviceList: React.FC = () => {
   // Modal state
   const [showModal, setShowModal] = useState(false);
   const [modalMode, setModalMode] = useState<'add' | 'edit'>('add');
-  const [formData, setFormData] = useState<DeviceFormData>(emptyForm);
+  const [formData, setFormData] = useState<DeviceSheetFieldValues>(() => createEmptyDeviceFieldValues());
+  const [initialFormData, setInitialFormData] = useState<DeviceSheetFieldValues>(() => createEmptyDeviceFieldValues());
+  const [editingDeviceId, setEditingDeviceId] = useState('');
+  const [editingDeviceRowIndex, setEditingDeviceRowIndex] = useState<number | undefined>();
+  const [editingUpdatedAt, setEditingUpdatedAt] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState('');
 
@@ -96,11 +109,30 @@ const DeviceList: React.FC = () => {
     () => departmentPrintOptions.map(option => option.department),
     [departmentPrintOptions],
   );
+  const fieldSuggestions = useMemo(() => {
+    const valuesByField = new Map<DeviceSheetFieldHeader, Set<string>>();
+    DEVICE_SHEET_FIELDS.filter(field => field.suggestions).forEach(field => {
+      valuesByField.set(field.header, new Set<string>());
+    });
+    devices.forEach(device => {
+      valuesByField.forEach((values, header) => {
+        const value = String(device[header] ?? '').trim();
+        if (value) values.add(value);
+      });
+    });
+    valuesByField.get('Hiện trạng thực tế')?.add('Đang sử dụng');
+    return new Map(
+      Array.from(valuesByField, ([header, values]) => [
+        header,
+        Array.from(values).sort((left, right) => left.localeCompare(right, 'vi')),
+      ]),
+    );
+  }, [devices]);
   const selectedDepartmentDevices = useMemo(
     () => selectDevicesForDepartmentQrPrint(devices, printDepartment),
     [devices, printDepartment],
   );
-  const statusCounts = devices.reduce<Record<DeviceStatusFilter, number>>((acc, device) => {
+  const statusCounts = useMemo(() => devices.reduce<Record<DeviceStatusFilter, number>>((acc, device) => {
     const flags = getDeviceStatusFlags(device);
     acc.all += 1;
     Object.entries(flags).forEach(([key, value]) => {
@@ -115,16 +147,19 @@ const DeviceList: React.FC = () => {
     expired: 0,
     complianceWarning: 0,
     unassigned: 0,
-  });
+  }), [devices]);
   const activeCount = statusCounts.good;
   const reportedCount = statusCounts.reported;
   const repairingCount = statusCounts.repairing;
   const complianceWarningCount = statusCounts.complianceWarning;
   const expiredComplianceCount = statusCounts.expired;
   const unassignedCount = statusCounts.unassigned;
-  const recentCount = devices.filter(device => isRecentDevice(device)).length;
+  const recentCount = useMemo(
+    () => devices.filter(device => isRecentDevice(device)).length,
+    [devices],
+  );
 
-  const filteredDevices = devices.filter(device => {
+  const filteredDevices = useMemo(() => devices.filter(device => {
     // Smart search (multi-keyword, diacritics-insensitive matching id, name, department, notes)
     const searchMatch = matchSmartSearch(device, ['id', 'name', 'department', 'Ghi chú'], searchTerm);
     const deptMatch = departmentFilter === 'all' || String(device.department || '').trim() === departmentFilter;
@@ -132,10 +167,13 @@ const DeviceList: React.FC = () => {
     const recentMatch = !recentOnly || isRecentDevice(device);
 
     return searchMatch && deptMatch && statusMatch && recentMatch;
-  });
+  }), [departmentFilter, devices, recentOnly, searchTerm, statusFilter]);
 
   const totalPages = Math.ceil(filteredDevices.length / itemsPerPage);
-  const paginatedDevices = filteredDevices.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+  const paginatedDevices = useMemo(
+    () => filteredDevices.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage),
+    [currentPage, filteredDevices],
+  );
 
   const handlePrintSingleQR = (device: DeviceData) => setPrintingDevices([device]);
   const closeDepartmentPrintModal = () => {
@@ -172,7 +210,12 @@ const DeviceList: React.FC = () => {
 
   const openAddModal = () => {
     if (!isAdmin) return;
-    setFormData(emptyForm);
+    const emptyValues = createEmptyDeviceFieldValues();
+    setFormData(emptyValues);
+    setInitialFormData(emptyValues);
+    setEditingDeviceId('');
+    setEditingDeviceRowIndex(undefined);
+    setEditingUpdatedAt('');
     setModalMode('add');
     setSaveMsg('');
     setShowModal(true);
@@ -180,20 +223,27 @@ const DeviceList: React.FC = () => {
 
   const openEditModal = (device: DeviceData) => {
     if (!isAdmin) return;
-    setFormData({
-      serial: String(device.id || ''),
-      name: String(device.name || ''),
-      department: String(device.department || ''),
-      dateAdded: device.dateAdded !== 'N/A' ? String(device.dateAdded || '') : '',
-      notes: String(device['Ghi chú'] || ''),
-    });
+    const deviceValues = deviceToSheetFieldValues(device);
+    const rowIndex = Number(device._rowIndex);
+    setFormData(deviceValues);
+    setInitialFormData(deviceValues);
+    setEditingDeviceId(String(device.id || device['id'] || device['Seri Máy'] || ''));
+    setEditingDeviceRowIndex(Number.isInteger(rowIndex) && rowIndex >= 2 ? rowIndex : undefined);
+    setEditingUpdatedAt(deviceValues['Ngày cập nhật']);
     setModalMode('edit');
     setSaveMsg('');
     setShowModal(true);
   };
 
   const handleFormChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
-    setFormData(prev => ({ ...prev, [e.target.name]: e.target.value }));
+    const header = e.currentTarget.name as DeviceSheetFieldHeader;
+    const value = e.currentTarget.value;
+    setFormData(current => ({ ...current, [header]: value }));
+    if (saveMsg) setSaveMsg('');
+  };
+
+  const closeDeviceModal = () => {
+    if (!isSaving) setShowModal(false);
   };
 
   const handleSave = async (e: React.FormEvent) => {
@@ -202,22 +252,42 @@ const DeviceList: React.FC = () => {
       setSaveMsg('❌ Bạn không có quyền thay đổi danh mục thiết bị.');
       return;
     }
-    if (!formData.name.trim() || !formData.department.trim()) {
+    if (!formData['Tên Thiết bị'].trim() || !formData['Nơi đặt thiết bị'].trim()) {
       setSaveMsg('❌ Vui lòng điền đầy đủ tên thiết bị và khoa/phòng.');
       return;
     }
+    const fields = modalMode === 'add'
+      ? buildDeviceMutationFields(formData)
+      : buildChangedDeviceMutationFields(formData, initialFormData);
+    if (modalMode === 'edit' && Object.keys(fields).length === 0) {
+      toast.info('Không có thay đổi để lưu.');
+      setShowModal(false);
+      return;
+    }
+
     setIsSaving(true);
     setSaveMsg('');
-    const res = modalMode === 'add'
-      ? await addDevice({ name: formData.name, serial: formData.serial, department: formData.department, dateAdded: formData.dateAdded, notes: formData.notes })
-      : await editDevice({ serial: formData.serial, name: formData.name, department: formData.department, dateAdded: formData.dateAdded, notes: formData.notes });
-    setIsSaving(false);
-    if (res.success) {
-      toast.success(res.message || 'Thành công!');
-      await refetch();
-      setShowModal(false);
-    } else {
-      setSaveMsg('❌ ' + (res.message || 'Có lỗi xảy ra.'));
+    try {
+      const res = modalMode === 'add'
+        ? await addDevice({ fields })
+        : await editDevice({
+          originalId: editingDeviceId,
+          originalRowIndex: editingDeviceRowIndex,
+          expectedUpdatedAt: editingUpdatedAt,
+          fields,
+        });
+      if (res.success) {
+        toast.success(res.message || 'Thành công!');
+        await refetch();
+        setShowModal(false);
+      } else {
+        setSaveMsg('❌ ' + (res.message || 'Có lỗi xảy ra.'));
+      }
+    } catch (error) {
+      console.error(error);
+      setSaveMsg('❌ Không thể kết nối tới Google Sheet. Vui lòng thử lại.');
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -587,73 +657,105 @@ const DeviceList: React.FC = () => {
       {/* Modal Thêm / Sửa thiết bị */}
       <Modal
         isOpen={showModal}
-        onClose={() => setShowModal(false)}
+        onClose={closeDeviceModal}
         title={modalMode === 'add' ? '➕ Thêm thiết bị mới' : '✏️ Sửa thông tin thiết bị'}
-        size="md"
+        size="lg"
       >
-        <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        <form
+          onSubmit={handleSave}
+          className="device-sheet-form"
+          aria-busy={isSaving}
+          aria-describedby={saveMsg ? 'device-form-message' : undefined}
+        >
+          <p className="device-sheet-form-intro">
+            Các trường bên dưới khớp với cột thực tế của sheet <strong>Devices</strong>.
+            Trường có dấu * là bắt buộc; thông tin hệ thống được hiển thị nhưng không cho sửa trực tiếp.
+          </p>
 
-          <div>
-            <label style={{ display: 'block', fontWeight: '600', marginBottom: '6px', fontSize: '0.9rem', color: 'var(--text-primary)' }}>Tên thiết bị *</label>
-            <input
-              name="name" value={formData.name} onChange={handleFormChange}
-              placeholder="VD: Máy siêu âm màu Doppler 4D"
-              required
-              style={{ width: '100%', padding: '10px 14px', border: '1.5px solid var(--border)', borderRadius: '8px', fontSize: '0.95rem', boxSizing: 'border-box' }}
-            />
-          </div>
+          {DEVICE_FORM_SECTIONS.map(section => {
+            const sectionFields = DEVICE_FIELDS_BY_SECTION.get(section.key) || [];
+            return (
+              <fieldset key={section.key} className={`device-form-section device-form-section-${section.key}`}>
+                <legend>{section.title}</legend>
+                <p className="device-form-section-description">{section.description}</p>
+                <div className="device-form-grid">
+                  {sectionFields.map((field, fieldIndex) => {
+                    const fieldId = `device-field-${section.key}-${fieldIndex}`;
+                    const readOnly = !field.editable || (modalMode === 'edit' && field.createOnly);
+                    const discoveredSuggestions = field.header === 'Nơi đặt thiết bị'
+                      ? uniqueDepartments
+                      : (fieldSuggestions.get(field.header) || []);
+                    const listId = discoveredSuggestions.length > 0 && !readOnly
+                      ? `${fieldId}-options`
+                      : undefined;
+                    const fieldClassName = `device-form-field${field.multiline ? ' is-wide' : ''}`;
+                    const requiredInvalid = Boolean(
+                      field.required
+                      && saveMsg.startsWith('❌ Vui lòng')
+                      && !formData[field.header].trim(),
+                    );
 
-          <div>
-            <label style={{ display: 'block', fontWeight: '600', marginBottom: '6px', fontSize: '0.9rem', color: 'var(--text-primary)' }}>Seri / Mã thiết bị</label>
-            <input
-              name="serial" value={formData.serial} onChange={handleFormChange}
-              placeholder="VD: TB-001 (để trống hệ thống tự tạo)"
-              readOnly={modalMode === 'edit'}
-              style={{ width: '100%', padding: '10px 14px', border: '1.5px solid var(--border)', borderRadius: '8px', fontSize: '0.95rem', background: modalMode === 'edit' ? 'var(--surface-50)' : 'white', boxSizing: 'border-box' }}
-            />
-          </div>
-
-          <div>
-            <label style={{ display: 'block', fontWeight: '600', marginBottom: '6px', fontSize: '0.9rem', color: 'var(--text-primary)' }}>Khoa/phòng sử dụng *</label>
-            <input
-              name="department" value={formData.department} onChange={handleFormChange}
-              placeholder="VD: Khoa Chẩn đoán hình ảnh"
-              list="dept-list"
-              required
-              style={{ width: '100%', padding: '10px 14px', border: '1.5px solid var(--border)', borderRadius: '8px', fontSize: '0.95rem', boxSizing: 'border-box' }}
-            />
-            <datalist id="dept-list">
-              {uniqueDepartments.map(d => <option key={d} value={d} />)}
-            </datalist>
-          </div>
-
-          <div>
-            <label style={{ display: 'block', fontWeight: '600', marginBottom: '6px', fontSize: '0.9rem', color: 'var(--text-primary)' }}>Ngày nhập / đăng kiểm</label>
-            <input
-              name="dateAdded" value={formData.dateAdded} onChange={handleFormChange}
-              placeholder="VD: 15/03/2025"
-              style={{ width: '100%', padding: '10px 14px', border: '1.5px solid var(--border)', borderRadius: '8px', fontSize: '0.95rem', boxSizing: 'border-box' }}
-            />
-          </div>
-
-          <div>
-            <label style={{ display: 'block', fontWeight: '600', marginBottom: '6px', fontSize: '0.9rem', color: 'var(--text-primary)' }}>Ghi chú thêm</label>
-            <textarea
-              name="notes" value={formData.notes} onChange={handleFormChange}
-              placeholder="Nguồn vốn, nhà cung cấp, ghi chú kỹ thuật..."
-              rows={3}
-              style={{ width: '100%', padding: '10px 14px', border: '1.5px solid var(--border)', borderRadius: '8px', fontSize: '0.95rem', resize: 'vertical', boxSizing: 'border-box' }}
-            />
-          </div>
+                    return (
+                      <div key={field.header} className={fieldClassName}>
+                        <label htmlFor={fieldId}>
+                          {field.label}{field.required ? ' *' : ''}
+                        </label>
+                        {field.multiline ? (
+                          <textarea
+                            id={fieldId}
+                            name={field.header}
+                            value={formData[field.header]}
+                            onChange={handleFormChange}
+                            placeholder={field.placeholder}
+                            rows={3}
+                            readOnly={readOnly}
+                            required={field.required}
+                            aria-invalid={requiredInvalid || undefined}
+                          />
+                        ) : (
+                          <input
+                            id={fieldId}
+                            name={field.header}
+                            value={formData[field.header]}
+                            onChange={handleFormChange}
+                            placeholder={readOnly && modalMode === 'add' ? 'Hệ thống tự cập nhật' : field.placeholder}
+                            inputMode={field.inputMode}
+                            list={listId}
+                            readOnly={readOnly}
+                            required={field.required}
+                            aria-invalid={requiredInvalid || undefined}
+                            autoComplete="off"
+                          />
+                        )}
+                        {listId && (
+                          <datalist id={listId}>
+                            {discoveredSuggestions.map(value => <option key={value} value={value} />)}
+                          </datalist>
+                        )}
+                        {field.createOnly && modalMode === 'edit' && (
+                          <small>Mã quản lý được giữ cố định để bảo toàn liên kết QR và lịch sử.</small>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </fieldset>
+            );
+          })}
 
           {saveMsg && (
-            <div style={{ padding: '10px 14px', borderRadius: '8px', background: saveMsg.startsWith('✅') ? 'var(--success-light)' : 'var(--danger-light)', color: saveMsg.startsWith('✅') ? 'var(--success)' : 'var(--danger)', fontSize: '0.9rem' }}>
+            <div
+              id="device-form-message"
+              className={`device-form-message ${saveMsg.startsWith('✅') ? 'is-success' : 'is-error'}`}
+              role="alert"
+              aria-live="assertive"
+            >
               {saveMsg}
             </div>
           )}
 
-          <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '4px' }}>
-            <Button type="button" variant="secondary" onClick={() => setShowModal(false)}>Hủy</Button>
+          <div className="device-form-actions">
+            <Button type="button" variant="secondary" onClick={closeDeviceModal} disabled={isSaving}>Hủy</Button>
             <Button type="submit" variant="primary" icon={isSaving ? <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> : <Save size={16} />} disabled={isSaving}>
               {isSaving ? 'Đang lưu...' : (modalMode === 'add' ? 'Thêm thiết bị' : 'Lưu thay đổi')}
             </Button>

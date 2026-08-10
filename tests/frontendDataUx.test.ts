@@ -97,6 +97,86 @@ test('device reads use authenticated POST and never require the local snapshot m
   assert.equal(devices[0]?.id, 'TB-001');
 });
 
+test('device form schema mirrors every unique field in the live Devices sheet', async () => {
+  const api = await import('../src/services/api.ts');
+  const schema = (api as typeof api & {
+    DEVICE_SHEET_FIELDS?: Array<{ header: string; editable: boolean }>;
+  }).DEVICE_SHEET_FIELDS;
+  const expectedHeaders = [
+    'id',
+    'Tên Thiết bị',
+    'Đơn vị tính',
+    'Số lượng',
+    'Model',
+    'Seri Máy',
+    'Nơi đặt thiết bị',
+    'Hiện trạng thực tế',
+    'Hãng SX',
+    'Nước SX',
+    'Năm SX',
+    'Năm SD',
+    'Giá',
+    'Nguồn',
+    'Phân loại',
+    'Công ty cung ứng',
+    'Nhóm',
+    'Ghi chú',
+    'Ngày tạo',
+    'Ngày cập nhật',
+    'Trạng thái tổng hợp',
+    'Cảnh báo đăng kiểm',
+    'Ngày cập nhật trạng thái',
+  ];
+
+  assert.ok(Array.isArray(schema), 'Thiếu cấu hình trường thiết bị dùng chung cho form thêm/sửa.');
+  assert.deepEqual(schema.map(field => field.header), expectedHeaders);
+  assert.deepEqual(
+    schema.filter(field => field.editable).map(field => field.header),
+    expectedHeaders.slice(0, 18),
+  );
+});
+
+test('add and edit device flows share the complete sheet-backed field payload', () => {
+  const source = readFileSync('src/pages/DeviceList.tsx', 'utf8');
+
+  assert.match(source, /DEVICE_SHEET_FIELDS/);
+  assert.match(source, /buildDeviceMutationFields\(formData\)/);
+  assert.match(source, /buildChangedDeviceMutationFields\(formData, initialFormData\)/);
+  assert.match(source, /addDevice\(\{ fields \}\)/);
+  assert.match(source, /originalId:\s*editingDeviceId/);
+  assert.doesNotMatch(source, /dateAdded:\s*formData\.dateAdded/);
+});
+
+test('complete device form announces saving and validation states accessibly', () => {
+  const source = readFileSync('src/pages/DeviceList.tsx', 'utf8');
+
+  assert.match(source, /aria-busy=\{isSaving\}/);
+  assert.match(source, /aria-live="assertive"/);
+  assert.match(source, /role="alert"/);
+  assert.match(source, /htmlFor=\{fieldId\}/);
+});
+
+test('device edits send only changed fields and cannot dismiss a request while saving', async () => {
+  const api = await import('../src/services/api.ts');
+  const source = readFileSync('src/pages/DeviceList.tsx', 'utf8');
+  const css = readFileSync('src/pages/Devices.css', 'utf8');
+  const initial = api.createEmptyDeviceFieldValues();
+  initial.id = 'TB-001';
+  initial['Tên Thiết bị'] = 'Máy cũ';
+  initial['Nơi đặt thiết bị'] = 'Khoa Nội';
+  initial['Ngày cập nhật'] = '10/08/2026 08:00:00';
+  const changed = { ...initial, 'Tên Thiết bị': 'Máy mới' };
+
+  assert.deepEqual(api.buildChangedDeviceMutationFields(changed, initial), {
+    'Tên Thiết bị': 'Máy mới',
+  });
+  assert.match(source, /originalRowIndex:\s*editingDeviceRowIndex/);
+  assert.match(source, /expectedUpdatedAt:\s*editingUpdatedAt/);
+  assert.match(source, /if \(!isSaving\) setShowModal\(false\)/);
+  assert.match(source, /disabled=\{isSaving\}[^>]*>Hủy<\/Button>/s);
+  assert.match(css, /\.device-form-actions\s*\{[^}]*position:\s*sticky/s);
+});
+
 test('an invalid API session clears storage and announces logout', async () => {
   writeAuthSession({ username: 'operator', token: 'expired-token', role: 'User' });
   let invalidEvents = 0;

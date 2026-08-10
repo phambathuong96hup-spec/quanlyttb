@@ -69,6 +69,7 @@ const DEVICE_HEADERS = [
   'Cảnh báo đăng kiểm',
   'Ngày cập nhật trạng thái'
 ];
+const DEVICE_EDITABLE_HEADERS = DEVICE_HEADERS.slice(0, 18);
 
 const DOCUMENT_HEADERS = [
   'DeviceId',
@@ -776,8 +777,8 @@ function syncDeviceAggregateStatusRow_(rowIndex, device, docs) {
   return resolved;
 }
 
-function syncDeviceStatusForDevice_(deviceId) {
-  const rowIndex = findDeviceRow_(deviceId);
+function syncDeviceStatusForDevice_(deviceId, preferredRowIndex) {
+  const rowIndex = Number(preferredRowIndex) >= 2 ? Number(preferredRowIndex) : findDeviceRow_(deviceId);
   if (rowIndex < 2) return null;
   const device = rowObject_(SHEETS.devices, rowIndex);
   const resolvedDeviceId = String(device.id || device['Seri Máy'] || deviceId || '').trim();
@@ -798,6 +799,7 @@ function getDevicesJoined_() {
   
   return deviceRows.map(entry => {
     const device = entry.data;
+    device._rowIndex = entry.rowIndex;
     const devId = String(device.id || device['Seri Máy'] || '').trim();
     const devDocs = docsByDevice[devId] || [];
     device.documents = devDocs;
@@ -890,45 +892,175 @@ function getDevicesJoinedFiltered_(payload) {
 }
 
 
+function deviceMutationFields_(payload) {
+  const input = payload || {};
+  const directFields = input.fields && typeof input.fields === 'object' && !Array.isArray(input.fields)
+    ? input.fields
+    : {};
+  const legacyFields = {
+    id: input.id || input.serial,
+    'Tên Thiết bị': input.name,
+    'Đơn vị tính': input.unit,
+    'Số lượng': input.quantity,
+    Model: input.model,
+    'Seri Máy': input.serial,
+    'Nơi đặt thiết bị': input.department,
+    'Hiện trạng thực tế': input.operationalStatus || input.status,
+    'Hãng SX': input.manufacturer,
+    'Nước SX': input.country,
+    'Năm SX': input.manufactureYear || input.yearMfg,
+    'Năm SD': input.useYear || input.yearUse,
+    Giá: input.price,
+    Nguồn: input.source,
+    'Phân loại': input.classification,
+    'Công ty cung ứng': input.supplier || input.supplyCompany,
+    Nhóm: input.group,
+    'Ghi chú': input.notes
+  };
+
+  return DEVICE_EDITABLE_HEADERS.reduce((fields, header) => {
+    if (Object.prototype.hasOwnProperty.call(directFields, header)) {
+      fields[header] = safeDeviceCellValue_(directFields[header]);
+    } else if (legacyFields[header] !== undefined) {
+      fields[header] = safeDeviceCellValue_(legacyFields[header]);
+    }
+    return fields;
+  }, {});
+}
+
+function safeDeviceCellValue_(value) {
+  const text = value === null || value === undefined ? '' : String(value).trim();
+  return text.charAt(0) === '=' ? "'" + text : text;
+}
+
+function validateDeviceMutationFields_(fields) {
+  if (!String(fields['Tên Thiết bị'] || '').trim()) {
+    return { success: false, message: 'Vui lòng nhập tên thiết bị.' };
+  }
+  if (!String(fields['Nơi đặt thiết bị'] || '').trim()) {
+    return { success: false, message: 'Vui lòng nhập khoa/phòng sử dụng.' };
+  }
+  for (let index = 0; index < DEVICE_EDITABLE_HEADERS.length; index += 1) {
+    const header = DEVICE_EDITABLE_HEADERS[index];
+    const maxLength = header === 'Ghi chú' ? 5000 : 500;
+    if (String(fields[header] || '').length > maxLength) {
+      return { success: false, message: 'Trường "' + header + '" vượt quá độ dài cho phép.' };
+    }
+  }
+  return null;
+}
+
+function withDeviceMutationLock_(callback) {
+  if (typeof LockService === 'undefined' || !LockService.getScriptLock) return callback();
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) {
+    return { success: false, message: 'Dữ liệu đang được cập nhật. Vui lòng thử lại sau vài giây.' };
+  }
+  try {
+    return callback();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 function addDevice_(payload, actor) {
-  const id = payload.serial || nextDeviceId_();
-  appendObject_(SHEETS.devices, {
-    id,
-    'Tên Thiết bị': payload.name || '',
-    'Seri Máy': id,
-    'Nơi đặt thiết bị': payload.department || '',
-    'Ngày cấp/ Ngày Đăng kiểm': payload.dateAdded || '',
-    'Ghi chú': payload.notes || '',
-    'Số lượng': payload.quantity || 1,
-    'Ngày tạo': new Date(),
-    'Ngày cập nhật': new Date()
+  const fields = deviceMutationFields_(payload);
+  const validationError = validateDeviceMutationFields_(fields);
+  if (validationError) return validationError;
+
+  return withDeviceMutationLock_(function() {
+    let id = String(fields.id || '').trim();
+    if (!id) {
+      const firstOffset = Math.max(getRows_(SHEETS.devices).length + 1, 1);
+      for (let attempt = 0; attempt < 1000; attempt += 1) {
+        const candidate = nextDeviceId_(firstOffset + attempt);
+        if (findDeviceRow_(candidate) < 2) {
+          id = candidate;
+          break;
+        }
+      }
+      if (!id) return { success: false, message: 'Không thể tạo mã thiết bị duy nhất.' };
+    }
+
+    const serial = String(fields['Seri Máy'] || '').trim() || id;
+    const identifiers = [id, serial].filter(function(value, index, values) {
+      return value && values.indexOf(value) === index;
+    });
+    const duplicateIdentifier = identifiers.find(function(identifier) {
+      return findDeviceRow_(identifier) >= 2;
+    });
+    if (duplicateIdentifier) {
+      return { success: false, message: 'Mã quản lý hoặc seri "' + duplicateIdentifier + '" đã tồn tại.' };
+    }
+
+    fields.id = id;
+    fields['Seri Máy'] = serial;
+    if (!String(fields['Số lượng'] || '').trim()) fields['Số lượng'] = 1;
+    appendObject_(SHEETS.devices, {
+      ...fields,
+      'Ngày tạo': new Date(),
+      'Ngày cập nhật': new Date()
+    });
+    syncDeviceStatusForDevice_(id);
+    logActivity_(
+      'Thêm thiết bị',
+      id,
+      fields['Tên Thiết bị'] || '',
+      'Khoa/phòng: ' + String(fields['Nơi đặt thiết bị'] || ''),
+      actor
+    );
+    return { success: true, message: 'Đã thêm thiết bị.' };
   });
-  syncDeviceStatusForDevice_(id);
-  logActivity_('Thêm thiết bị', id, payload.name || '', 'Khoa/phòng: ' + String(payload.department || ''), actor);
-  return { success: true, message: 'Đã thêm thiết bị.' };
 }
 
 function editDevice_(payload, actor) {
-  const rowIndex = findDeviceRow_(payload.serial || payload.id);
-  if (rowIndex < 2) return { success: false, message: 'Không tìm thấy thiết bị.' };
-  const before = rowObject_(SHEETS.devices, rowIndex);
-  updateRowByObject_(SHEETS.devices, rowIndex, {
-    'Tên Thiết bị': payload.name,
-    'Seri Máy': payload.serial,
-    'Nơi đặt thiết bị': payload.department,
-    'Ngày cấp/ Ngày Đăng kiểm': payload.dateAdded,
-    'Ghi chú': payload.notes,
-    'Ngày cập nhật': new Date()
+  const fields = deviceMutationFields_(payload);
+  const originalId = String(payload.originalId || payload.id || payload.serial || fields.id || '').trim();
+  return withDeviceMutationLock_(function() {
+    const requestedRowIndex = Number(payload.originalRowIndex);
+    let rowIndex = -1;
+    let before = null;
+
+    if (Number.isInteger(requestedRowIndex) && requestedRowIndex >= 2) {
+      before = rowObject_(SHEETS.devices, requestedRowIndex);
+      const rowId = String(before.id || before['Seri Máy'] || '').trim();
+      const rowSerial = String(before['Seri Máy'] || '').trim();
+      if (originalId && rowId !== originalId && rowSerial !== originalId) {
+        return { success: false, message: 'Dòng thiết bị đã thay đổi vị trí. Vui lòng tải lại danh sách trước khi lưu.' };
+      }
+      rowIndex = requestedRowIndex;
+    } else {
+      rowIndex = findDeviceRow_(originalId);
+      if (rowIndex >= 2) before = rowObject_(SHEETS.devices, rowIndex);
+    }
+
+    if (rowIndex < 2 || !before) return { success: false, message: 'Không tìm thấy thiết bị.' };
+    const expectedUpdatedAt = String(payload.expectedUpdatedAt || '').trim();
+    const currentUpdatedAt = String(before['Ngày cập nhật'] || '').trim();
+    if (expectedUpdatedAt && currentUpdatedAt !== expectedUpdatedAt) {
+      return { success: false, message: 'Thiết bị đã được người khác cập nhật. Vui lòng tải lại dữ liệu rồi thử lại.' };
+    }
+
+    delete fields.id;
+    const after = { ...before, ...fields };
+    const validationError = validateDeviceMutationFields_(after);
+    if (validationError) return validationError;
+    if (Object.keys(fields).length === 0) return { success: true, message: 'Không có thay đổi để lưu.' };
+
+    updateRowByObject_(SHEETS.devices, rowIndex, {
+      ...fields,
+      'Ngày cập nhật': new Date()
+    });
+    syncDeviceStatusForDevice_(originalId, rowIndex);
+    logActivity_(
+      'Sửa thiết bị',
+      originalId,
+      after['Tên Thiết bị'] || before['Tên Thiết bị'] || '',
+      'Khoa/phòng: "' + String(before['Nơi đặt thiết bị'] || '') + '" -> "' + String(after['Nơi đặt thiết bị'] || '') + '".',
+      actor
+    );
+    return { success: true, message: 'Đã cập nhật thiết bị.' };
   });
-  syncDeviceStatusForDevice_(payload.serial || payload.id);
-  logActivity_(
-    'Sửa thiết bị',
-    payload.serial || payload.id,
-    payload.name || before['Tên Thiết bị'] || '',
-    'Khoa/phòng: "' + String(before['Nơi đặt thiết bị'] || '') + '" -> "' + String(payload.department || '') + '".',
-    actor
-  );
-  return { success: true, message: 'Đã cập nhật thiết bị.' };
 }
 
 function importSnapshotDevices_(payload, actor) {
@@ -2651,7 +2783,7 @@ function getRows_(sheetName) {
   const headers = values.shift();
   return values
     .filter(row => row.some(cell => String(cell).trim() !== ''))
-    .map(row => Object.fromEntries(headers.map((header, index) => [header, row[index] || ''])));
+    .map(row => rowObjectFromValues_(headers, row));
 }
 
 function getRowsWithRowIndex_(sheetName) {
@@ -2664,8 +2796,43 @@ function getRowsWithRowIndex_(sheetName) {
     .filter(entry => entry.row.some(cell => String(cell).trim() !== ''))
     .map(entry => ({
       rowIndex: entry.rowIndex,
-      data: Object.fromEntries(headers.map((header, index) => [header, entry.row[index] || '']))
+      data: rowObjectFromValues_(headers, entry.row)
     }));
+}
+
+function rowObjectFromValues_(headers, row) {
+  return headers.reduce(function(object, rawHeader, index) {
+    const header = String(rawHeader || '').trim();
+    if (!header) return object;
+    const value = row[index] === null || row[index] === undefined ? '' : row[index];
+    const currentValue = object[header];
+    if (currentValue === undefined || (!String(currentValue).trim() && String(value).trim())) {
+      object[header] = value;
+    }
+    return object;
+  }, {});
+}
+
+function objectToAppendRow_(headers, object) {
+  const seenHeaders = {};
+  return headers.map(function(rawHeader) {
+    const header = String(rawHeader || '').trim();
+    if (!header || seenHeaders[header]) return '';
+    seenHeaders[header] = true;
+    return object[header] === undefined ? '' : object[header];
+  });
+}
+
+function applyObjectToRow_(headers, row, object) {
+  const updatedRow = row.slice();
+  const seenHeaders = {};
+  headers.forEach(function(rawHeader, index) {
+    const header = String(rawHeader || '').trim();
+    if (!header || seenHeaders[header]) return;
+    seenHeaders[header] = true;
+    if (object[header] !== undefined) updatedRow[index] = object[header];
+  });
+  return updatedRow;
 }
 
 function getUserRows_(forceRefresh) {
@@ -2743,7 +2910,7 @@ function userStatus_(user) {
 function appendObject_(sheetName, object) {
   const sheet = deviceSpreadsheet_().getSheetByName(sheetName);
   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-  sheet.appendRow(headers.map(header => object[header] === undefined ? '' : object[header]));
+  sheet.appendRow(objectToAppendRow_(headers, object));
 }
 
 function updateRowByObject_(sheetName, rowIndex, object) {
@@ -2751,10 +2918,7 @@ function updateRowByObject_(sheetName, rowIndex, object) {
   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
   const range = sheet.getRange(rowIndex, 1, 1, headers.length);
   const row = range.getValues()[0];
-  headers.forEach((header, index) => {
-    if (object[header] !== undefined) row[index] = object[header];
-  });
-  range.setValues([row]);
+  range.setValues([applyObjectToRow_(headers, row, object)]);
 }
 
 function replaceSheetRows_(sheetName, headers, rows) {
@@ -2778,7 +2942,7 @@ function rowObject_(sheetName, rowIndex) {
   const sheet = deviceSpreadsheet_().getSheetByName(sheetName);
   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
   const row = sheet.getRange(rowIndex, 1, 1, headers.length).getDisplayValues()[0];
-  return Object.fromEntries(headers.map((header, index) => [header, row[index] || '']));
+  return rowObjectFromValues_(headers, row);
 }
 
 function findDeviceRow_(deviceId) {

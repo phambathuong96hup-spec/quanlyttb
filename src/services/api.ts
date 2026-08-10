@@ -5,7 +5,7 @@ import { isArchivedDocumentStatus } from '../utils/documentWorkflow.ts';
 import { unwrapAppsScriptReadResponse } from './apiEnvelope.ts';
 
 // WARNING: Hardcoding the GAS URL/key here is a security risk. In production, always use env variables.
-const DEFAULT_GOOGLE_SHEETS_API_URL = 'https://script.google.com/macros/s/AKfycbyiztSF70YfnPToWcp6dLkrgWLpzGTTvXvGEbURpR8P8VXmyzdHmwT3cgQWu88lwRlyHw/exec';
+const DEFAULT_GOOGLE_SHEETS_API_URL = 'https://script.google.com/macros/s/AKfycbxhaOjofUhw78hxAbg7P3LcQcMRHHqPQvzU67TaoVReUCGHi_-y060TzSgvGlS3HO8KSQ/exec';
 
 const ENV = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {};
 export const GOOGLE_SHEETS_API_URL = ENV.VITE_THIET_BI_API_URL || DEFAULT_GOOGLE_SHEETS_API_URL;
@@ -71,6 +71,121 @@ export interface DeviceData {
   alertLevel?: 'ok' | 'warning' | 'danger';
   minDaysUntil?: number;
   [key: string]: unknown;
+}
+
+export type DeviceSheetFieldHeader =
+  | 'id'
+  | 'Tên Thiết bị'
+  | 'Đơn vị tính'
+  | 'Số lượng'
+  | 'Model'
+  | 'Seri Máy'
+  | 'Nơi đặt thiết bị'
+  | 'Hiện trạng thực tế'
+  | 'Hãng SX'
+  | 'Nước SX'
+  | 'Năm SX'
+  | 'Năm SD'
+  | 'Giá'
+  | 'Nguồn'
+  | 'Phân loại'
+  | 'Công ty cung ứng'
+  | 'Nhóm'
+  | 'Ghi chú'
+  | 'Ngày tạo'
+  | 'Ngày cập nhật'
+  | 'Trạng thái tổng hợp'
+  | 'Cảnh báo đăng kiểm'
+  | 'Ngày cập nhật trạng thái';
+
+export type DeviceSheetFieldValues = Record<DeviceSheetFieldHeader, string>;
+
+export interface DeviceSheetFieldDefinition {
+  header: DeviceSheetFieldHeader;
+  label: string;
+  section: 'identity' | 'usage' | 'origin' | 'notes' | 'system';
+  editable: boolean;
+  required?: boolean;
+  createOnly?: boolean;
+  multiline?: boolean;
+  inputMode?: 'text' | 'numeric' | 'decimal';
+  placeholder?: string;
+  suggestions?: boolean;
+}
+
+export const DEVICE_SHEET_FIELDS: DeviceSheetFieldDefinition[] = [
+  { header: 'id', label: 'Mã quản lý (id)', section: 'identity', editable: true, createOnly: true, placeholder: 'Để trống để hệ thống tự tạo' },
+  { header: 'Tên Thiết bị', label: 'Tên thiết bị', section: 'identity', editable: true, required: true, placeholder: 'VD: Máy theo dõi bệnh nhân' },
+  { header: 'Đơn vị tính', label: 'Đơn vị tính', section: 'identity', editable: true, suggestions: true, placeholder: 'VD: Cái, Bộ, Chiếc' },
+  { header: 'Số lượng', label: 'Số lượng', section: 'identity', editable: true, inputMode: 'numeric', placeholder: '1' },
+  { header: 'Model', label: 'Model', section: 'identity', editable: true, placeholder: 'Model của thiết bị' },
+  { header: 'Seri Máy', label: 'Seri máy', section: 'identity', editable: true, placeholder: 'Số seri của nhà sản xuất' },
+  { header: 'Nơi đặt thiết bị', label: 'Khoa/phòng sử dụng', section: 'usage', editable: true, required: true, suggestions: true, placeholder: 'Chọn hoặc nhập khoa/phòng' },
+  { header: 'Hiện trạng thực tế', label: 'Hiện trạng thực tế', section: 'usage', editable: true, suggestions: true, placeholder: 'VD: Đang sử dụng' },
+  { header: 'Hãng SX', label: 'Hãng sản xuất', section: 'origin', editable: true, suggestions: true },
+  { header: 'Nước SX', label: 'Nước sản xuất', section: 'origin', editable: true, suggestions: true },
+  { header: 'Năm SX', label: 'Năm sản xuất', section: 'origin', editable: true, inputMode: 'numeric', placeholder: 'YYYY' },
+  { header: 'Năm SD', label: 'Năm sử dụng', section: 'origin', editable: true, inputMode: 'numeric', placeholder: 'YYYY' },
+  { header: 'Giá', label: 'Giá', section: 'origin', editable: true, inputMode: 'decimal', placeholder: 'Giá trị thiết bị' },
+  { header: 'Nguồn', label: 'Nguồn kinh phí', section: 'origin', editable: true, suggestions: true },
+  { header: 'Phân loại', label: 'Phân loại', section: 'origin', editable: true, suggestions: true },
+  { header: 'Công ty cung ứng', label: 'Công ty cung ứng', section: 'origin', editable: true, suggestions: true },
+  { header: 'Nhóm', label: 'Nhóm thiết bị', section: 'origin', editable: true, suggestions: true },
+  { header: 'Ghi chú', label: 'Ghi chú', section: 'notes', editable: true, multiline: true, placeholder: 'Ghi chú kỹ thuật hoặc thông tin bổ sung' },
+  { header: 'Ngày tạo', label: 'Ngày tạo', section: 'system', editable: false },
+  { header: 'Ngày cập nhật', label: 'Ngày cập nhật', section: 'system', editable: false },
+  { header: 'Trạng thái tổng hợp', label: 'Trạng thái tổng hợp', section: 'system', editable: false },
+  { header: 'Cảnh báo đăng kiểm', label: 'Cảnh báo đăng kiểm', section: 'system', editable: false },
+  { header: 'Ngày cập nhật trạng thái', label: 'Ngày cập nhật trạng thái', section: 'system', editable: false },
+];
+
+export const createEmptyDeviceFieldValues = (): DeviceSheetFieldValues => {
+  const values = Object.fromEntries(
+    DEVICE_SHEET_FIELDS.map(field => [field.header, '']),
+  ) as DeviceSheetFieldValues;
+  values['Số lượng'] = '1';
+  values['Hiện trạng thực tế'] = 'Đang sử dụng';
+  return values;
+};
+
+export const deviceToSheetFieldValues = (device: DeviceData): DeviceSheetFieldValues => {
+  const values = createEmptyDeviceFieldValues();
+  DEVICE_SHEET_FIELDS.forEach(field => {
+    let value = device[field.header];
+    if (field.header === 'id') value = device.id;
+    if (field.header === 'Tên Thiết bị') value = device['Tên Thiết bị'] ?? device.name;
+    if (field.header === 'Nơi đặt thiết bị') value = device['Nơi đặt thiết bị'] ?? device.department;
+    if (field.header === 'Hiện trạng thực tế') value = device['Hiện trạng thực tế'] ?? device.operationalStatus ?? device.status;
+    values[field.header] = value === null || value === undefined ? '' : String(value);
+  });
+  return values;
+};
+
+export const buildDeviceMutationFields = (
+  values: DeviceSheetFieldValues,
+): Partial<DeviceSheetFieldValues> => Object.fromEntries(
+  DEVICE_SHEET_FIELDS
+    .filter(field => field.editable)
+    .map(field => [field.header, String(values[field.header] ?? '').trim()]),
+) as Partial<DeviceSheetFieldValues>;
+
+export const buildChangedDeviceMutationFields = (
+  values: DeviceSheetFieldValues,
+  initialValues: DeviceSheetFieldValues,
+): Partial<DeviceSheetFieldValues> => Object.fromEntries(
+  DEVICE_SHEET_FIELDS
+    .filter(field => field.editable)
+    .map(field => [
+      field.header,
+      String(values[field.header] ?? '').trim(),
+      String(initialValues[field.header] ?? '').trim(),
+    ] as const)
+    .filter(([, value, initialValue]) => value !== initialValue)
+    .map(([header, value]) => [header, value]),
+) as Partial<DeviceSheetFieldValues>;
+
+export interface DeviceMutationPayload extends Record<string, unknown> {
+  fields: Partial<DeviceSheetFieldValues>;
 }
 
 export interface UserData {
@@ -346,22 +461,14 @@ export const approveRepair = async (payload: { rowId: string; deviceId: string; 
   return postAction('approveRepair', payload);
 };
 
-export const addDevice = async (payload: {
-  name: string;
-  serial: string;
-  department: string;
-  dateAdded: string;
-  notes?: string;
-}) => {
+export const addDevice = async (payload: DeviceMutationPayload) => {
   return postAction('addDevice', payload);
 };
 
-export const editDevice = async (payload: {
-  serial: string;
-  name: string;
-  department: string;
-  dateAdded: string;
-  notes?: string;
+export const editDevice = async (payload: DeviceMutationPayload & {
+  originalId: string;
+  originalRowIndex?: number;
+  expectedUpdatedAt?: string;
 }) => {
   return postAction('editDevice', payload);
 };

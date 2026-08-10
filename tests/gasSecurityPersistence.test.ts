@@ -151,6 +151,166 @@ test('getDevices and getDepartments reject requests without an authenticated ses
   assert.match(departmentsResult.message, /Phiên đăng nhập/);
 });
 
+test('device create and edit persist every editable Devices sheet field', () => {
+  const gas = loadGas();
+  const fields = {
+    id: 'TB-NEW-001',
+    'Tên Thiết bị': 'Máy theo dõi bệnh nhân',
+    'Đơn vị tính': 'Cái',
+    'Số lượng': '2',
+    Model: 'PM-9000',
+    'Seri Máy': 'SN-2026-001',
+    'Nơi đặt thiết bị': 'Khoa Hồi sức',
+    'Hiện trạng thực tế': 'Đang sử dụng',
+    'Hãng SX': 'Mindray',
+    'Nước SX': 'Trung Quốc',
+    'Năm SX': '2025',
+    'Năm SD': '2026',
+    Giá: '120000000',
+    Nguồn: 'Ngân sách nhà nước',
+    'Phân loại': 'B',
+    'Công ty cung ứng': 'Công ty Thiết bị Y tế',
+    Nhóm: 'Monitor',
+    'Ghi chú': 'Theo dõi tại giường',
+    'Ngày tạo': 'không được tin cậy',
+    'Trạng thái tổng hợp': 'không được tin cậy',
+  };
+  let appended: Record<string, unknown> | undefined;
+  let updated: Record<string, unknown> | undefined;
+  gas.appendObject_ = (_sheet: string, values: Record<string, unknown>) => { appended = values; };
+  gas.updateRowByObject_ = (_sheet: string, _row: number, values: Record<string, unknown>) => { updated = values; };
+  gas.nextDeviceId_ = () => 'TB-AUTO';
+  let deviceLookupCount = 0;
+  gas.findDeviceRow_ = (id: string) => {
+    deviceLookupCount += 1;
+    if (deviceLookupCount === 1) assert.equal(id, 'TB-NEW-001');
+    if (deviceLookupCount === 2) assert.equal(id, 'SN-2026-001');
+    if (deviceLookupCount === 3) assert.equal(id, 'TB-NEW-001');
+    return deviceLookupCount === 3 ? 2 : -1;
+  };
+  gas.rowObject_ = () => ({ 'Tên Thiết bị': 'Tên cũ', 'Nơi đặt thiết bị': 'Khoa cũ' });
+  gas.syncDeviceStatusForDevice_ = () => undefined;
+  gas.logActivity_ = () => undefined;
+
+  const added = gas.addDevice_({ fields }, { 'Tên đăng nhập': 'admin' });
+  const edited = gas.editDevice_({ originalId: 'TB-NEW-001', fields }, { 'Tên đăng nhập': 'admin' });
+
+  assert.equal(added.success, true);
+  assert.equal(edited.success, true);
+  assert.ok(appended);
+  assert.ok(updated);
+  Object.entries(fields).slice(0, 18).forEach(([header, value]) => {
+    assert.equal(appended?.[header], value, `Thiếu trường thêm mới: ${header}`);
+    if (header !== 'id') assert.equal(updated?.[header], value, `Thiếu trường chỉnh sửa: ${header}`);
+  });
+  assert.notEqual(appended?.['Ngày tạo'], 'không được tin cậy');
+  assert.equal(updated?.['Trạng thái tổng hợp'], undefined);
+});
+
+test('duplicate sheet headers preserve the first non-empty value and only update the canonical column', () => {
+  const gas = loadGas();
+  const headers = ['id', 'Nhóm', 'Trạng thái tổng hợp', 'Nhóm', 'Trạng thái tổng hợp'];
+  const row = ['TB-001', 'Monitor', 'Đang sử dụng', '', ''];
+
+  assert.deepEqual({ ...gas.rowObjectFromValues_(headers, row) }, {
+    id: 'TB-001',
+    Nhóm: 'Monitor',
+    'Trạng thái tổng hợp': 'Đang sử dụng',
+  });
+  assert.deepEqual(
+    Array.from(gas.objectToAppendRow_(headers, { id: 'TB-002', Nhóm: 'Máy thở', 'Trạng thái tổng hợp': 'Tốt' })),
+    ['TB-002', 'Máy thở', 'Tốt', '', ''],
+  );
+  assert.deepEqual(
+    Array.from(gas.applyObjectToRow_(headers, row, { Nhóm: 'Máy theo dõi' })),
+    ['TB-001', 'Máy theo dõi', 'Đang sử dụng', '', ''],
+  );
+});
+
+test('adding a device rejects an id or serial that already identifies another row', () => {
+  const gas = loadGas();
+  let appended = false;
+  gas.appendObject_ = () => { appended = true; };
+  gas.findDeviceRow_ = () => 7;
+  gas.syncDeviceStatusForDevice_ = () => undefined;
+  gas.logActivity_ = () => undefined;
+
+  const result = gas.addDevice_({ fields: {
+    id: 'TB-TRUNG',
+    'Seri Máy': 'SN-TRUNG',
+    'Tên Thiết bị': 'Máy theo dõi',
+    'Nơi đặt thiết bị': 'Khoa Nội',
+  } }, { 'Tên đăng nhập': 'admin' });
+
+  assert.equal(result.success, false);
+  assert.match(result.message, /đã tồn tại|trùng/i);
+  assert.equal(appended, false);
+});
+
+test('device text that resembles a formula is stored as literal sheet content', () => {
+  const gas = loadGas();
+  let appended: Record<string, unknown> | undefined;
+  gas.appendObject_ = (_sheet: string, values: Record<string, unknown>) => { appended = values; };
+  gas.findDeviceRow_ = () => -1;
+  gas.syncDeviceStatusForDevice_ = () => undefined;
+  gas.logActivity_ = () => undefined;
+
+  const result = gas.addDevice_({ fields: {
+    id: 'TB-SAFE-001',
+    'Tên Thiết bị': '=IMPORTDATA("https://example.test")',
+    'Nơi đặt thiết bị': 'Khoa Nội',
+  } }, { 'Tên đăng nhập': 'admin' });
+
+  assert.equal(result.success, true);
+  assert.equal(appended?.['Tên Thiết bị'], "'=IMPORTDATA(\"https://example.test\")");
+});
+
+test('device edit targets its exact sheet row and rejects a stale form', () => {
+  const gas = loadGas();
+  let updated: Record<string, unknown> | undefined;
+  let syncedRow = 0;
+  gas.findDeviceRow_ = () => { throw new Error('Không được dò dòng đầu tiên khi đã có row index.'); };
+  gas.rowObject_ = (_sheet: string, rowIndex: number) => {
+    assert.equal(rowIndex, 9);
+    return {
+      id: 'TB-DUP',
+      'Seri Máy': 'SN-DUP-2',
+      'Tên Thiết bị': 'Máy theo dõi',
+      'Nơi đặt thiết bị': 'Khoa Nội',
+      'Ngày cập nhật': '10/08/2026 08:00:00',
+    };
+  };
+  gas.updateRowByObject_ = (_sheet: string, rowIndex: number, values: Record<string, unknown>) => {
+    assert.equal(rowIndex, 9);
+    updated = values;
+  };
+  gas.syncDeviceStatusForDevice_ = (_id: string, rowIndex: number) => { syncedRow = rowIndex; };
+  gas.logActivity_ = () => undefined;
+
+  const saved = gas.editDevice_({
+    originalId: 'TB-DUP',
+    originalRowIndex: 9,
+    expectedUpdatedAt: '10/08/2026 08:00:00',
+    fields: { 'Ghi chú': 'Đã hiệu chuẩn' },
+  }, { 'Tên đăng nhập': 'admin' });
+
+  assert.equal(saved.success, true);
+  assert.equal(updated?.['Ghi chú'], 'Đã hiệu chuẩn');
+  assert.equal(updated?.['Tên Thiết bị'], undefined);
+  assert.equal(syncedRow, 9);
+
+  updated = undefined;
+  const stale = gas.editDevice_({
+    originalId: 'TB-DUP',
+    originalRowIndex: 9,
+    expectedUpdatedAt: '09/08/2026 10:00:00',
+    fields: { 'Ghi chú': 'Dữ liệu cũ' },
+  }, { 'Tên đăng nhập': 'admin' });
+  assert.equal(stale.success, false);
+  assert.match(stale.message, /được người khác cập nhật|tải lại/i);
+  assert.equal(updated, undefined);
+});
+
 test('repair visibility is limited to the actor or their department while admin sees all', () => {
   const gas = loadGas();
   assert.equal(typeof gas.filterRepairsForActor_, 'function');
