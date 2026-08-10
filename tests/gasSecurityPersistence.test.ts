@@ -71,6 +71,51 @@ test('login bypasses device sheet initialization', () => {
   assert.equal(setupCalls, 0);
 });
 
+test('user directory cache avoids repeated sheet reads without caching a plaintext PIN', () => {
+  const gas = loadGas();
+  let sheetReads = 0;
+  gas.userSheet_ = () => ({
+    getLastRow: () => 2,
+    getDataRange: () => ({
+      getDisplayValues: () => {
+        sheetReads += 1;
+        return [
+          ['Tên đăng nhập', 'Mã PIN', 'Trạng thái'],
+          ['cached-user', '2468', 'active'],
+        ];
+      },
+    }),
+  });
+
+  const first = gas.getUserRows_();
+  const second = gas.getUserRows_();
+
+  assert.equal(sheetReads, 1);
+  assert.notEqual(first[0]['Mã PIN'], '2468');
+  assert.equal(first[0]['Mã PIN'], second[0]['Mã PIN']);
+  assert.equal(gas.verifyPin_('2468', first[0]['Mã PIN']), true);
+  assert.equal(gas.verifyPin_('0000', first[0]['Mã PIN']), false);
+});
+
+test('updating a user invalidates the cached directory', () => {
+  const gas = loadGas();
+  let invalidations = 0;
+  gas.invalidateUserRowsCache_ = () => { invalidations += 1; };
+  gas.userSheet_ = () => ({
+    getLastColumn: () => 2,
+    getRange: (row: number) => row === 1
+      ? { getValues: () => [['Tên đăng nhập', 'Mã PIN']] }
+      : {
+          getValues: () => [['cached-user', '2468']],
+          setValues: () => undefined,
+        },
+  });
+
+  gas.updateUserRowByObject_(2, { 'Mã PIN': '8642' });
+
+  assert.equal(invalidations, 1);
+});
+
 test('getDevices and getDepartments reject requests without an authenticated session', () => {
   const gas = loadGas();
   gas.setupSheets = () => undefined;

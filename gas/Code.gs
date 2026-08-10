@@ -149,6 +149,9 @@ const COST_ENTRY_HEADERS = ['CostId', 'DeviceId', 'Ngày', 'Số tiền', 'Loạ
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const LOGIN_MAX_ATTEMPTS = 5;
 const LOGIN_WINDOW_SECONDS = 15 * 60;
+const USER_ROWS_CACHE_SECONDS = 60;
+const USER_ROWS_CACHE_KEY = 'user-rows:v2';
+const CACHED_PIN_PREFIX = 'cache-v1$';
 
 function doGet(e) {
   const parameters = e && e.parameter ? e.parameter : {};
@@ -402,6 +405,9 @@ function hashPin_(pin) {
 
 function verifyPin_(pin, storedPin) {
   const stored = String(storedPin || '').trim();
+  if (stored.indexOf(CACHED_PIN_PREFIX) === 0) {
+    return constantTimeEqual_(cachedPinValue_(pin), stored);
+  }
   if (!isHashedPin_(stored)) return constantTimeEqual_(String(pin || ''), stored);
 
   const parts = stored.split('$');
@@ -409,6 +415,24 @@ function verifyPin_(pin, storedPin) {
   const digest = Utilities.computeHmacSha256Signature(parts[1] + ':' + String(pin || ''), pinPepper_());
   const expected = stripBase64Padding_(Utilities.base64EncodeWebSafe(digest));
   return constantTimeEqual_(expected, parts[2]);
+}
+
+function cachedPinValue_(pin) {
+  const digest = Utilities.computeHmacSha256Signature('user-cache:' + String(pin || ''), pinPepper_());
+  return CACHED_PIN_PREFIX + stripBase64Padding_(Utilities.base64EncodeWebSafe(digest));
+}
+
+function protectCachedUserPins_(user) {
+  const protectedUser = { ...user };
+  const sensitiveHeaders = pinFieldKeys_().map(normalizeHeader_);
+  Object.keys(protectedUser).forEach(key => {
+    if (sensitiveHeaders.indexOf(normalizeHeader_(key)) === -1) return;
+    const storedPin = String(protectedUser[key] || '').trim();
+    if (storedPin && !isHashedPin_(storedPin) && storedPin.indexOf(CACHED_PIN_PREFIX) !== 0) {
+      protectedUser[key] = cachedPinValue_(storedPin);
+    }
+  });
+  return protectedUser;
 }
 
 function loginRateKey_(username) {
@@ -2627,13 +2651,36 @@ function getRowsWithRowIndex_(sheetName) {
 }
 
 function getUserRows_() {
+  const cache = CacheService.getScriptCache();
+  try {
+    const cached = cache.get(USER_ROWS_CACHE_KEY);
+    if (cached) {
+      const rows = JSON.parse(cached);
+      if (Array.isArray(rows)) return rows;
+    }
+  } catch (err) {
+    console.warn('getUserRows_ cache read failed', err);
+  }
+
   const sheet = userSheet_();
   if (!sheet || sheet.getLastRow() < 2) return [];
   const values = sheet.getDataRange().getDisplayValues();
   const headers = values.shift();
-  return values
+  const rows = values
     .filter(row => row.some(cell => String(cell).trim() !== ''))
-    .map(row => Object.fromEntries(headers.map((header, index) => [header, row[index] || ''])));
+    .map(row => Object.fromEntries(headers.map((header, index) => [header, row[index] || ''])))
+    .map(protectCachedUserPins_);
+
+  try {
+    cache.put(USER_ROWS_CACHE_KEY, JSON.stringify(rows), USER_ROWS_CACHE_SECONDS);
+  } catch (err) {
+    console.warn('getUserRows_ cache write failed', err);
+  }
+  return rows;
+}
+
+function invalidateUserRowsCache_() {
+  CacheService.getScriptCache().remove(USER_ROWS_CACHE_KEY);
 }
 
 function getUserField_(user, keys) {
@@ -2874,7 +2921,7 @@ function userSpreadsheet_() {
 
 function userSheet_() {
   const ss = userSpreadsheet_();
-  return sheetByGid_(ss, USERS_SHEET_GID) || ss.getSheetByName(SHEETS.users) || ss.getSheets()[0];
+  return ss.getSheetByName(SHEETS.users) || sheetByGid_(ss, USERS_SHEET_GID) || ss.getSheets()[0];
 }
 
 function sheetByGid_(spreadsheet, gid) {
@@ -3227,6 +3274,7 @@ function updateUserRowByObject_(rowIndex, object) {
     }
   });
   range.setValues([row]);
+  invalidateUserRowsCache_();
 }
 
 function editUser_(payload) {
