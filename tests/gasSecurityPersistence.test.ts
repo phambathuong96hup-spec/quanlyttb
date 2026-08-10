@@ -234,7 +234,7 @@ test('user responses remove PIN fields even when a legacy header has unusual spa
   assert.equal(safeUser['Tên đăng nhập'], 'legacy');
 });
 
-test('a successful legacy PIN login migrates the stored plaintext immediately', () => {
+test('a successful legacy PIN login does not rewrite the PIN cell', () => {
   const gas = loadGas();
   const user = {
     'Tên đăng nhập': 'legacy',
@@ -245,23 +245,21 @@ test('a successful legacy PIN login migrates the stored plaintext immediately', 
     'Khoa/Phòng': 'Khoa Nội',
     'Trạng thái': 'active',
   };
-  let migrated: Record<string, string> | null = null;
+  let updateCalls = 0;
   let auditAction = '';
   gas.getUserRows_ = () => [user];
   gas.findUserRowIndex_ = () => 2;
-  gas.updateUserRowByObject_ = (_rowIndex: number, values: Record<string, string>) => { migrated = values; };
+  gas.updateUserRowByObject_ = () => { updateCalls += 1; };
   gas.logActivity_ = (action: string) => { auditAction = action; };
 
   const result = gas.login_({ username: 'legacy', pin: '1234' });
 
   assert.equal(result.success, true);
-  assert.ok(migrated);
-  assert.match(migrated!['Mã PIN'], /^v1\$/);
-  assert.equal(migrated!['Mã PIN'].includes('1234'), false);
-  assert.equal(auditAction, 'Nâng cấp bảo mật PIN');
+  assert.equal(updateCalls, 0);
+  assert.equal(auditAction, '');
 });
 
-test('legacy password aliases are migrated in the actual source column', () => {
+test('legacy password aliases remain unchanged during login', () => {
   const gas = loadGas();
   const user = {
     'Tên đăng nhập': 'legacy-password',
@@ -269,18 +267,16 @@ test('legacy password aliases are migrated in the actual source column', () => {
     'Quyền hạn': 'user',
     'Trạng thái': 'active',
   };
-  let migrated: Record<string, string> | null = null;
+  let updateCalls = 0;
   gas.getUserRows_ = () => [user];
   gas.findUserRowIndex_ = () => 2;
-  gas.updateUserRowByObject_ = (_rowIndex: number, values: Record<string, string>) => { migrated = values; };
+  gas.updateUserRowByObject_ = () => { updateCalls += 1; };
   gas.logActivity_ = () => undefined;
 
   const result = gas.login_({ username: 'legacy-password', pin: '2468' });
 
   assert.equal(result.success, true);
-  assert.ok(migrated);
-  assert.match(migrated!['Mật khẩu'], /^v1\$/);
-  assert.equal(Object.hasOwn(migrated!, 'Mã PIN'), false);
+  assert.equal(updateCalls, 0);
 });
 
 test('repeated invalid PIN attempts temporarily block even a later valid PIN', () => {

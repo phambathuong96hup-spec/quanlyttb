@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
-const apiEndpoint = 'https://script.google.com/macros/s/AKfycbzohWgpRv9sfiIwEd6zpuIinbkH_kTPibZBbE1iZS6lHB4womXVm2lUn39yDS51RF_4Pg/exec';
+const apiEndpoint = 'https://script.google.com/macros/s/AKfycbyiztSF70YfnPToWcp6dLkrgWLpzGTTvXvGEbURpR8P8VXmyzdHmwT3cgQWu88lwRlyHw/exec';
 const oldEndpoints = [
+  'https://script.google.com/macros/s/AKfycbzohWgpRv9sfiIwEd6zpuIinbkH_kTPibZBbE1iZS6lHB4womXVm2lUn39yDS51RF_4Pg/exec',
   'https://script.google.com/macros/s/AKfycbzSKzwvDvK_5eL83ZEqZpouG9HWaJEd6zIIkQxiR6ouozcjSPhfgIy9cbFbeYasgPE_Jg/exec',
   'https://script.google.com/macros/s/AKfycbzHzDXD7Ai6a4rgaNxM0baVnLZPp9kqt3FJS_ljI1NgPuN5_KdJgBW9nbEre7rNp7QOxw/exec',
   'https://script.google.com/macros/s/AKfycbwLcdYjEyM_la4W7I821vKjVosT3jVZDc3g7Efrue0m7KCpXO34DE8wyJWmfI9bePGr/exec',

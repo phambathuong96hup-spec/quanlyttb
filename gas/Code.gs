@@ -360,23 +360,6 @@ function login_(payload) {
     return { success: false, message: 'Tên đăng nhập hoặc mã PIN không chính xác.' };
   }
 
-  if (!isHashedPin_(storedPin)) {
-    const rowIndex = findUserRowIndex_(userUsername_(user));
-    if (rowIndex < 2) {
-      return { success: false, message: 'Không thể nâng cấp bảo mật mã PIN cho tài khoản.' };
-    }
-    const update = {};
-    update[pinStorageKey_(user)] = hashPin_(pin);
-    updateUserRowByObject_(rowIndex, update);
-    logActivity_(
-      'Nâng cấp bảo mật PIN',
-      userUsername_(user),
-      userDisplayName_(user),
-      'Đã chuyển PIN legacy sang định dạng hash có salt.',
-      user
-    );
-  }
-
   clearLoginFailures_(rateIdentity);
   const session = createSessionToken_(user);
   return { success: true, user: sanitizeUser_(user), token: session.token, expiresAt: session.expiresAt };
