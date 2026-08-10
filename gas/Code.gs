@@ -171,6 +171,7 @@ function doPost(e) {
 }
 
 function route_(action, payload) {
+  if (action === 'login') return login_(payload);
   setupSheets();
   let actor;
   switch (action) {
@@ -182,8 +183,6 @@ function route_(action, payload) {
       actor = requireAuthenticated_(payload);
       if (!actor) return authError_();
       return getDepartments_();
-    case 'login':
-      return login_(payload);
     case 'getUsers':
       actor = requireAdmin_(payload);
       if (!actor) return authError_();

@@ -59,6 +59,18 @@ test('doGet tolerates manual Apps Script execution without an event object', () 
   assert.match(result.message, /Web app/i);
 });
 
+test('login bypasses device sheet initialization', () => {
+  const gas = loadGas();
+  let setupCalls = 0;
+  gas.setupSheets = () => { setupCalls += 1; };
+  gas.login_ = () => ({ success: true });
+
+  const result = gas.route_('login', { username: 'latency-test', pin: '1234' });
+
+  assert.equal(result.success, true);
+  assert.equal(setupCalls, 0);
+});
+
 test('getDevices and getDepartments reject requests without an authenticated session', () => {
   const gas = loadGas();
   gas.setupSheets = () => undefined;
