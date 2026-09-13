@@ -5,6 +5,7 @@ export interface UseDevicesReturn {
   devices: DeviceData[];
   isLoading: boolean;
   error: Error | null;
+  lastUpdated: number | null;
   /** Force a fresh fetch, ignoring the cache. Updates all consumers. */
   refetch: () => Promise<void>;
   /** Optimistic update: replace cached data without a network call. */
@@ -12,7 +13,7 @@ export interface UseDevicesReturn {
 }
 
 export function useDevices(): UseDevicesReturn {
-  const { data, isLoading, error, refetch, mutate } = useApiResource<DeviceData>(
+  const { data, isLoading, error, lastUpdated, refetch, mutate } = useApiResource<DeviceData>(
     'devices',
     fetchDevices
   );
@@ -21,6 +22,7 @@ export function useDevices(): UseDevicesReturn {
     devices: data,
     isLoading,
     error,
+    lastUpdated,
     refetch,
     mutate,
   };

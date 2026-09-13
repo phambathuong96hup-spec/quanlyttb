@@ -160,6 +160,7 @@ test('repair request sends multiple images and videos in one compact payload', a
   await page.goto('/requests?type=repair');
 
   const attachmentInput = page.locator('input[type="file"][multiple]');
+  await page.getByLabel('Thiết bị báo hỏng', { exact: true }).selectOption('TB-001');
   await expect(attachmentInput).toHaveCount(1);
   await attachmentInput.setInputFiles([
     { name: 'hien-trang.jpg', mimeType: 'image/jpeg', buffer: Buffer.from('qa-image') },
@@ -180,6 +181,8 @@ test('repair request sends multiple images and videos in one compact payload', a
   expect(attachments[0]).toMatchObject({ name: 'van-hanh.mp4', mimeType: 'video/mp4' });
   expect(attachments[0].content).not.toBe(submittedPayload?.imageContent);
   await expect(page.locator('.request-subtab.active')).toContainText('Tiếp nhận yêu cầu');
+  await page.locator('.request-subtab').filter({ hasText: 'Tạo yêu cầu' }).click();
+  await expect(page.getByLabel('Thiết bị báo hỏng', { exact: true })).toHaveValue('');
 });
 
 test('norms lookup separates departments and supports search and pagination', async ({ page }) => {
@@ -203,12 +206,19 @@ test('norms lookup separates departments and supports search and pagination', as
 
   const ngoaiDepartment = page.locator('.norms-department-list button').filter({ hasText: 'NGOAI' });
   await expect(ngoaiDepartment).toHaveCount(1);
-  await ngoaiDepartment.click();
+  const mobilePicker = page.getByLabel('Chọn khoa/phòng', { exact: true });
+  if (await mobilePicker.isVisible()) {
+    const value = await mobilePicker.locator('option').filter({ hasText: 'NGOAI' }).getAttribute('value');
+    await mobilePicker.selectOption(value!);
+  } else await ngoaiDepartment.click();
   await expect(page.getByRole('heading', { name: 'NGOAI', exact: true })).toBeVisible();
   await expect(page.locator('.norms-pagination')).toContainText('Trang 1');
 
   const maternityDepartment = page.locator('.norms-department-list button').filter({ hasText: 'Khoa sản' });
-  await maternityDepartment.click();
+  if (await mobilePicker.isVisible()) {
+    const value = await mobilePicker.locator('option').filter({ hasText: 'Khoa sản' }).getAttribute('value');
+    await mobilePicker.selectOption(value!);
+  } else await maternityDepartment.click();
   await expect(page.locator('.norms-data-warning')).toContainText('17');
 });
 
@@ -239,4 +249,167 @@ test('norms lookup hides technical Excel column labels', async ({ page }) => {
   await expect(table.getByRole('columnheader', { name: 'Cột A', exact: true })).not.toBeVisible();
   await expect(table.locator('thead th')).toHaveCount(6);
   await expect(table.locator('tbody tr').first()).toBeVisible();
+});
+
+test('repair form requires an explicit device selection on mobile', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await seedSession(page, validSession);
+  await mockGas(page);
+  await page.goto('/requests?type=repair');
+  const picker = page.locator('select.request-select').first();
+  await expect(picker.locator('option[value="TB-001"]')).toBeAttached();
+  await expect(picker).toHaveValue('');
+});
+
+test('device list fits a narrow phone and keeps details accessible', async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 740 });
+  await seedSession(page, validSession);
+  await mockGas(page);
+  await page.goto('/devices');
+  const details = page.getByRole('button', { name: 'Xem chi tiết Máy thở QA', exact: true });
+  await expect(details).toBeVisible();
+  const box = await details.boundingBox();
+  expect(box!.width).toBeGreaterThanOrEqual(44);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(360);
+  await details.click();
+  await expect(page).toHaveURL(/devices\/TB-001$/);
+});
+
+test('mobile navigation opens more and closes it after choosing a page', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await seedSession(page, validSession);
+  await mockGas(page);
+  await page.goto('/devices');
+  const nav = page.getByRole('navigation', { name: 'Điều hướng điện thoại' });
+  await expect(nav).toBeVisible();
+  await page.screenshot({ path: `test-results/mobile-navigation-${test.info().project.name}.png`, fullPage: true });
+  await nav.getByRole('button', { name: 'Thêm' }).click();
+  await page.locator('.sidebar').getByRole('link', { name: 'Thống kê & báo cáo' }).click();
+  await expect(page).toHaveURL(/reports/);
+  await expect(page.locator('.layout-scrim')).toHaveCount(0);
+});
+
+test('cancelling repair approval dialog does not approve the request', async ({ page }) => {
+  let approvals = 0;
+  await seedSession(page, validSession);
+  await mockGas(page);
+  await page.route('**/macros/s/**/exec*', async route => {
+    const action = actionFromRoute(route);
+    if (action === 'getRepairs') {
+      await json(route, { success: true, data: [{ 'Thời gian': 'repair-1', 'Mã Máy/Thiết bị': 'TB-001', 'Trạng Thái': 'Chờ duyệt', 'Trạng thái': 'Chờ duyệt' }] });
+    } else if (action === 'approveRepair') {
+      approvals++;
+      await json(route, { success: true });
+    } else await route.fallback();
+  });
+  page.on('dialog', dialog => dialog.dismiss());
+  await page.goto('/requests?type=repair');
+  await page.getByRole('button', { name: /Tiếp nhận yêu cầu/ }).click();
+  await page.getByRole('button', { name: 'Đồng ý', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Duyệt yêu cầu sửa chữa' });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: 'Hủy', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(approvals).toBe(0);
+  await page.getByRole('button', { name: 'Đồng ý', exact: true }).click();
+  await dialog.getByLabel('Ghi chú duyệt (nếu có)').fill('Đã kiểm tra');
+  await dialog.getByRole('button', { name: 'Xác nhận', exact: true }).click();
+  await expect.poll(() => approvals).toBe(1);
+});
+
+test('mobile menu supports Escape and returns focus to its trigger', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await seedSession(page, validSession);
+  await mockGas(page);
+  await page.goto('/devices');
+  const more = page.getByRole('navigation', { name: 'Điều hướng điện thoại' }).getByRole('button', { name: 'Thêm' });
+  await more.click();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.layout-scrim')).toHaveCount(0);
+  await expect(more).toBeFocused();
+});
+
+test('inventory does not restore a previous shared terminal history', async ({ page }) => {
+  await seedSession(page, validSession);
+  await mockGas(page);
+  await page.addInitScript(() => localStorage.setItem('qlttb.inventory_runs', JSON.stringify([{ runId: 'private-run', name: 'Ca trực tài khoản khác', department: 'all', status: 'active', scans: [], createdAt: new Date().toISOString() }])));
+  await page.goto('/inventory');
+  await expect(page.getByRole('heading', { name: 'Kiểm kê QR', exact: true })).toBeVisible();
+  await expect(page.locator('option').filter({ hasText: 'Ca trực tài khoản khác' })).toHaveCount(0);
+});
+
+test('device list exposes data freshness and allows retry after a read failure', async ({ page }) => {
+  let failing = true;
+  await seedSession(page, validSession);
+  await mockGas(page);
+  await page.route('**/macros/s/**/exec*', async route => {
+    if (actionFromRoute(route) === 'getDevices' && failing) await json(route, { success: false, message: 'Tạm thời không tải được thiết bị' });
+    else await route.fallback();
+  });
+  await page.goto('/devices');
+  await expect(page.getByRole('alert').filter({ hasText: 'Tạm thời không tải được thiết bị' })).toBeVisible();
+  failing = false;
+  await page.getByRole('button', { name: 'Làm mới dữ liệu' }).click();
+  await expect(page.getByText(/Cập nhật lúc:/)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Xem chi tiết Máy thở QA', exact: true })).toBeVisible();
+});
+
+test('mobile image preparation reduces large photographs without changing videos', async ({ page }) => {
+  await page.goto('/login');
+  const result = await page.evaluate(async () => {
+    const modulePath = '/src/utils/attachmentUtils.ts';
+    const utility = await import(modulePath);
+    if (typeof utility.optimizeImageForUpload !== 'function') return { available: false };
+    const canvas = document.createElement('canvas');
+    canvas.width = 2400; canvas.height = 1800;
+    const context = canvas.getContext('2d')!;
+    const pixels = context.createImageData(2400, 1800);
+    let seed = 1234567;
+    const nextByte = () => { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; return seed & 255; };
+    for (let i = 0; i < pixels.data.length; i += 4) {
+      pixels.data[i] = nextByte(); pixels.data[i + 1] = nextByte(); pixels.data[i + 2] = nextByte(); pixels.data[i + 3] = 255;
+    }
+    context.putImageData(pixels, 0, 0);
+    const blob = await new Promise<Blob>(resolve => canvas.toBlob(value => resolve(value!), 'image/png'));
+    const input = new File([blob], 'photo.png', { type: 'image/png' });
+    const output = await utility.optimizeImageForUpload(input);
+    const video = new File(['video'], 'video.mp4', { type: 'video/mp4' });
+    const bitmap = await createImageBitmap(output);
+    const result = { available: true, inputSize: input.size, outputSize: output.size, outputType: output.type, smaller: output.size < input.size, width: bitmap.width, videoUnchanged: await utility.optimizeImageForUpload(video) === video };
+    bitmap.close();
+    return result;
+  });
+  expect(result.available).toBe(true);
+  expect(result.smaller, JSON.stringify(result)).toBe(true);
+  expect(result.width).toBeLessThanOrEqual(1600);
+  expect(result.videoUnchanged).toBe(true);
+});
+
+test('mobile device transfer dialog can be cancelled without submitting', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await seedSession(page, validSession);
+  await mockGas(page);
+  await page.goto('/devices/TB-001');
+  await page.getByRole('button', { name: 'Điều chuyển khoa', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Yêu cầu điều chuyển thiết bị' });
+  await expect(dialog).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+});
+
+test('inventory keeps its history when server deletion fails', async ({ page }) => {
+  await seedSession(page, validSession);
+  await mockGas(page);
+  await page.route('**/macros/s/**/exec*', async route => {
+    const action = actionFromRoute(route);
+    if (action === 'getInventoryRuns') await json(route, { success: true, data: [{ runId: 'run-keep', name: 'Đợt kiểm kê giữ lại', department: 'all', createdAt: '2026-09-13', status: 'closed', sheetName: 'KK_TEST' }] });
+    else if (action === 'deleteInventoryRun') await json(route, { success: false, message: 'Máy chủ chưa xóa được' });
+    else await route.fallback();
+  });
+  await page.goto('/inventory');
+  await expect(page.locator('option[value="run-keep"]')).toBeAttached();
+  await page.getByRole('button', { name: 'Xóa đợt', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Xác nhận', exact: true }).click();
+  await expect(page.getByText('Máy chủ chưa xóa được', { exact: true })).toBeVisible();
+  await expect(page.locator('option[value="run-keep"]')).toBeAttached();
 });

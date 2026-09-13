@@ -14,6 +14,8 @@ import {
   type InventoryRunSummary,
 } from '../services/api';
 import './InventoryQr.css';
+import { readAuthSession } from '../authSession';
+import { useActionPrompt } from '../hooks/useActionPrompt';
 
 const STORAGE_KEY = 'qlttb.inventory_runs';
 
@@ -72,9 +74,9 @@ const scannerFormats = [
   Html5QrcodeSupportedFormats.DATA_MATRIX,
 ];
 
-const readRuns = (): InventoryRun[] => {
+const readRuns = (owner: string): InventoryRun[] => {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = sessionStorage.getItem(`${STORAGE_KEY}:${owner}`);
     const parsed = raw ? JSON.parse(raw) : [];
     return Array.isArray(parsed) ? parsed : [];
   } catch {
@@ -82,8 +84,9 @@ const readRuns = (): InventoryRun[] => {
   }
 };
 
-const writeRuns = (runs: InventoryRun[]) => {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(runs));
+const writeRuns = (runs: InventoryRun[], owner: string) => {
+  if (readAuthSession().username !== owner) return;
+  sessionStorage.setItem(`${STORAGE_KEY}:${owner}`, JSON.stringify(runs));
 };
 
 const toInventoryStatus = (status: string): InventoryStatus => (
@@ -145,11 +148,12 @@ const extractScanCode = (value: string) => {
 const matchDeviceByCode = (devices: DeviceData[], rawCode: string) => {
   const code = extractScanCode(rawCode).toLowerCase();
   if (!code) return null;
-  return devices.find(device => {
+  const matches = devices.filter(device => {
     const id = cleanText(device.id).toLowerCase();
     const serial = cleanText(device.serial || device['Seri Máy']).toLowerCase();
-    return id === code || serial === code || id.includes(code) || serial.includes(code);
-  }) || null;
+    return id === code || id.split(';').map(value => value.trim()).includes(code) || serial === code;
+  });
+  return matches.length === 1 ? matches[0] : null;
 };
 
 const formatDateTime = (value: string) => {
@@ -174,9 +178,10 @@ const inventorySyncFailureMessage = (message?: string) => {
 const InventoryQr: React.FC = () => {
   const { devices, isLoading } = useDevices();
   const { username, name } = useAuth();
+  const { ask, dialog: actionDialog } = useActionPrompt();
   const toast = useToast();
-  const [runs, setRuns] = useState<InventoryRun[]>(readRuns);
-  const [selectedRunId, setSelectedRunId] = useState(() => readRuns()[0]?.runId || '');
+  const [runs, setRuns] = useState<InventoryRun[]>(() => readRuns(username));
+  const [selectedRunId, setSelectedRunId] = useState(() => readRuns(username)[0]?.runId || '');
   const [runName, setRunName] = useState('');
   const [runDepartment, setRunDepartment] = useState('all');
   const [scanCode, setScanCode] = useState('');
@@ -245,7 +250,7 @@ const InventoryQr: React.FC = () => {
 
   const persistRuns = (nextRuns: InventoryRun[]) => {
     setRuns(nextRuns);
-    writeRuns(nextRuns);
+    writeRuns(nextRuns, username);
   };
 
   const loadInventoryHistory = useCallback(async () => {
@@ -253,9 +258,9 @@ const InventoryQr: React.FC = () => {
     setHistoryError('');
     try {
       const serverRuns = await fetchInventoryRuns();
-      const merged = mergeInventoryRunHistory(readRuns(), serverRuns);
+      const merged = mergeInventoryRunHistory(readRuns(username), serverRuns);
       setRuns(merged);
-      writeRuns(merged);
+      writeRuns(merged, username);
       setSelectedRunId(currentId => (
         merged.some(run => run.runId === currentId) ? currentId : merged[0]?.runId || ''
       ));
@@ -264,7 +269,7 @@ const InventoryQr: React.FC = () => {
       setHistoryStatus('error');
       setHistoryError(error instanceof Error ? error.message : 'Không tải được lịch sử kiểm kê.');
     }
-  }, []);
+  }, [username]);
 
   useEffect(() => {
     void loadInventoryHistory();
@@ -449,6 +454,8 @@ const InventoryQr: React.FC = () => {
 
   const handleScan = async (event?: React.FormEvent) => {
     event?.preventDefault();
+    if (isSyncing) return;
+    if (activeRun?.status === 'closed') { toast.warning('Đợt kiểm kê đã khóa.'); return; }
     if (!activeRun) {
       toast.warning('Vui lòng tạo đợt kiểm kê trước.');
       return;
@@ -459,7 +466,7 @@ const InventoryQr: React.FC = () => {
     }
     const device = matchDeviceByCode(devices, scanCode);
     if (!device) {
-      toast.error('Không tìm thấy thiết bị từ mã QR/Serial vừa nhập.');
+      toast.error('Mã QR/Serial không khớp duy nhất một thiết bị. Vui lòng nhập đầy đủ mã quản lý.');
       return;
     }
 
@@ -512,30 +519,24 @@ const InventoryQr: React.FC = () => {
 
   const handleDeleteRun = async () => {
     if (!activeRun) return;
-    const confirmed = window.confirm(`Xóa đợt kiểm kê "${activeRun.name}"? Dữ liệu đã quét của đợt này sẽ bị xóa khỏi danh sách.`);
-    if (!confirmed) return;
+    const confirmed = await ask({ title: 'Xóa đợt kiểm kê', description: `Xóa đợt kiểm kê "${activeRun.name}"? Dữ liệu đã quét của đợt này sẽ bị xóa khỏi danh sách.` });
+    if (confirmed === null) return;
 
     setIsSyncing(true);
-    const nextRuns = runs.filter(run => run.runId !== activeRun.runId);
-    persistRuns(nextRuns);
-    setSelectedRunId(nextRuns[0]?.runId || '');
-
-    if (!activeRun.sheetName) {
-      setIsSyncing(false);
-      toast.success('Đã xóa đợt kiểm kê.');
-      return;
-    }
-
     try {
-      const response = await deleteInventoryRun({
-        runId: activeRun.runId,
-        sheetName: activeRun.sheetName,
-      });
-      if (response.success) {
-        toast.success('Đã xóa đợt kiểm kê và dữ liệu Google Sheets.');
-      } else {
-        toast.warning(response.message || 'Đã xóa trên máy này, nhưng chưa xóa được dữ liệu Google Sheets.');
+      if (activeRun.sheetName) {
+        const response = await deleteInventoryRun({ runId: activeRun.runId, sheetName: activeRun.sheetName });
+        if (!response.success) {
+          toast.error(response.message || 'Chưa xóa được trên máy chủ. Đợt kiểm kê được giữ lại.');
+          return;
+        }
       }
+      const nextRuns = runs.filter(run => run.runId !== activeRun.runId);
+      persistRuns(nextRuns);
+      setSelectedRunId(nextRuns[0]?.runId || '');
+      toast.success('Đã xóa đợt kiểm kê.');
+    } catch {
+      toast.error('Không kết nối được máy chủ. Đợt kiểm kê được giữ lại để thử lại.');
     } finally {
       setIsSyncing(false);
     }
@@ -570,6 +571,7 @@ const InventoryQr: React.FC = () => {
 
   return (
     <div className="inventory-page">
+      {actionDialog}
       <div className="page-header inventory-header">
         <div>
           <h1 className="page-title">

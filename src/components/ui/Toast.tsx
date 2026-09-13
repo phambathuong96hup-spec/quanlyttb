@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components */
-import React, { createContext, useContext, useState, useCallback, useRef, useEffect } from 'react';
+import React, { createContext, useContext, useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { CheckCircle, XCircle, AlertTriangle, Info, X } from 'lucide-react';
 import './Toast.css';
 
@@ -96,17 +96,17 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
   }, []);
 
-  const contextValue: ToastContextType = {
-    success: useCallback((msg: string) => addToast(msg, 'success'), [addToast]),
-    error: useCallback((msg: string) => addToast(msg, 'error'), [addToast]),
-    warning: useCallback((msg: string) => addToast(msg, 'warning'), [addToast]),
-    info: useCallback((msg: string) => addToast(msg, 'info'), [addToast]),
-  };
+  const contextValue = useMemo<ToastContextType>(() => ({
+    success: msg => addToast(msg, 'success'),
+    error: msg => addToast(msg, 'error'),
+    warning: msg => addToast(msg, 'warning'),
+    info: msg => addToast(msg, 'info'),
+  }), [addToast]);
 
   return (
     <ToastContext.Provider value={contextValue}>
       {children}
-      <div className="toast-container">
+      <div className="toast-container" role="status" aria-live="polite" aria-atomic="false">
         {toasts.map(toast => (
           <ToastItemComponent key={toast.id} toast={toast} onRemove={removeToast} />
         ))}

@@ -1,3 +1,4 @@
+import { useActionPrompt } from '../hooks/useActionPrompt';
 import React, { useState, useMemo } from 'react';
 import { approveRepair, createTransfer, type RepairData, type TransferData } from '../services/api';
 import { useRepairs } from '../hooks/useRepairs';
@@ -22,6 +23,7 @@ const TrackDevices: React.FC = () => {
   const { name, username, role, department } = useAuth();
   const isAdmin = role?.toLowerCase() === 'admin';
   const toast = useToast();
+  const { ask, dialog: actionDialog } = useActionPrompt();
   
   const { repairs, isLoading: isLoadingRepairs, refetch: refetchRepairs, mutate: mutateRepairs } = useRepairs();
   const { transfers, isLoading: isLoadingTransfers, refetch: refetchTransfers } = useTransfers();
@@ -77,7 +79,7 @@ const TrackDevices: React.FC = () => {
   };
 
   const handleReturnDevice = async (transfer: TransferData) => {
-    if (!window.confirm(`Bạn muốn hoàn trả thiết bị ${transfer.deviceName || transfer.deviceId} về khoa ${transfer.fromDepartment}?`)) return;
+    if (await ask({ title: 'Hoàn trả thiết bị', description: `Bạn muốn hoàn trả thiết bị ${transfer.deviceName || transfer.deviceId} về khoa ${transfer.fromDepartment}?` }) === null) return;
     
     const response = await createTransfer({ 
       deviceId: transfer.deviceId, 
@@ -101,6 +103,7 @@ const TrackDevices: React.FC = () => {
 
   return (
     <div className="admin-repairs-page">
+      {actionDialog}
       <div className="page-header">
         <h1 className="page-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <Activity size={28} style={{ color: 'var(--primary)' }} />

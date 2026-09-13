@@ -16,6 +16,7 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
   const [auth, setAuth] = useState<AuthState>(() => readAuthSession());
 
   const login = useCallback((user: Partial<AuthUser>) => {
+    clearApiResourceCache();
     setAuth(writeAuthSession(user));
   }, []);
 

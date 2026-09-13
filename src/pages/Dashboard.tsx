@@ -1,3 +1,4 @@
+import { useToast } from '../components/ui/Toast';
 import React, { useState } from 'react';
 import {
   Stethoscope,
@@ -34,6 +35,7 @@ import './Dashboard.css';
 
 
 const Dashboard: React.FC = () => {
+  const toast = useToast();
   const { devices, isLoading: isLoadingDevices, mutate: mutateDevices } = useDevices();
   const { repairs, isLoading: isLoadingRepairs } = useRepairs();
   const isLoading = isLoadingDevices || isLoadingRepairs;
@@ -170,7 +172,7 @@ const Dashboard: React.FC = () => {
 
   const handleDocStatusUpdate = async (serial: string, docType?: string) => {
     if (!isAdmin) {
-      alert('Chỉ tài khoản Admin được cập nhật trạng thái hồ sơ.');
+      toast.warning('Chỉ tài khoản Admin được cập nhật trạng thái hồ sơ.');
       return;
     }
     setUpdatingId(serial);
@@ -191,7 +193,7 @@ const Dashboard: React.FC = () => {
         };
       }));
     } else {
-      alert('Có lỗi xảy ra: ' + (res?.message || ''));
+      toast.warning('Có lỗi xảy ra: ' + (res?.message || ''));
     }
     setUpdatingId(null);
   };

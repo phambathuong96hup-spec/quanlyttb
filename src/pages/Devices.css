@@ -1134,3 +1134,39 @@
     flex: 1 1 130px;
   }
 }
+
+/* Compact device cards retain the same table actions and permissions. */
+@media screen and (max-width: 640px) {
+  .device-inventory-table .data-table { min-width: 0; table-layout: auto; display: block; }
+  .device-inventory-table thead { display: none; }
+  .device-inventory-table tbody { display: grid; gap: 12px; padding: 12px; }
+  .device-inventory-table .device-table-row {
+    display: flex; flex-direction: column; border: 1px solid var(--border);
+    border-radius: 12px; padding: 12px; min-width: 0;
+  }
+  .device-inventory-table .device-table-row td {
+    display: block; width: 100% !important; max-width: none;
+    padding: 6px 0; border: 0; white-space: normal; box-sizing: border-box;
+  }
+  .device-inventory-table .col-device-name { order: -1; }
+  .device-inventory-table .device-name-cell,
+  .device-inventory-table .department-badge { white-space: normal; overflow-wrap: anywhere; }
+  .device-inventory-table .action-buttons-cell { justify-content: flex-end; gap: 12px; }
+  .pagination { flex-direction: column; gap: 12px; }
+}
+
+.device-freshness { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 12px 0; color: var(--text-secondary); font-size: .875rem; }
+.mobile-filter-toggle { display: none; }
+@media screen and (max-width: 640px) {
+  .device-list-page .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .device-list-page .stat-card { padding: 10px; gap: 8px; min-height: 78px; }
+  .device-list-page .stat-icon-wrapper { display: none; }
+  .device-list-page .stat-content p { font-size: 12px; }
+  .device-freshness { align-items: flex-start; }
+  .device-freshness .btn { flex-shrink: 0; }
+  .mobile-filter-toggle { display: inline-flex; }
+  .device-list-page .filter-group:not(.filters-open) { display: none; }
+  .device-list-page .search-box { order: -1; }
+  .device-list-page .quick-filters-chips { flex-wrap: nowrap; overflow-x: auto; }
+  .device-list-page .quick-filters-chips .chip { flex-shrink: 0; }
+}

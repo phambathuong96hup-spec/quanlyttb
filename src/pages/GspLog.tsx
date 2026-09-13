@@ -1,3 +1,4 @@
+import { useToast } from '../components/ui/Toast';
 import React, { useCallback, useState, useEffect } from 'react';
 import { type TooltipItem } from 'chart.js';
 import { Line } from 'react-chartjs-2';
@@ -15,6 +16,7 @@ const GSP_LIMITS = {
 };
 
 const GspLog: React.FC = () => {
+  const toast = useToast();
   const [records, setRecords] = useState<GspRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -37,11 +39,11 @@ const GspLog: React.FC = () => {
       const data = await fetchGspRecords();
       setRecords(data);
     } catch {
-      alert('Lỗi tải dữ liệu nhật ký GSP.');
+      toast.warning('Lỗi tải dữ liệu nhật ký GSP.');
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [toast]);
 
   useEffect(() => {
     fetchGspData();
@@ -49,7 +51,7 @@ const GspLog: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name) return alert('Vui lòng đăng nhập!');
+    if (!name) return toast.warning('Vui lòng đăng nhập!');
     setIsSubmitting(true);
     try {
       const result = await addGspRecord({
@@ -60,14 +62,14 @@ const GspLog: React.FC = () => {
         recorder: name,
       });
       if (result.success) {
-        alert('✅ Đã ghi nhận thành công!');
+        toast.success('Đã ghi nhận thành công!');
         setForm({ shift: 'Sáng', tempKho: '', tempTuLanh: '', humidity: '', note: '' });
         fetchGspData();
       } else {
-        alert('❌ Lỗi: ' + result.message);
+        toast.warning('❌ Lỗi: ' + result.message);
       }
     } catch {
-      alert('Lỗi kết nối mạng!');
+      toast.warning('Lỗi kết nối mạng!');
     }
     setIsSubmitting(false);
   };

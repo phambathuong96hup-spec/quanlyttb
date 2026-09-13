@@ -1,3 +1,4 @@
+import { useActionPrompt } from '../hooks/useActionPrompt';
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   AlertCircle, Clock, Send, ShieldAlert, ChevronDown, ScanLine,
@@ -45,6 +46,7 @@ interface RepairRequestProps {
 const MAX_DEVICE_OPTIONS = 80;
 
 const RepairRequest: React.FC<RepairRequestProps> = ({ defaultTab = 'requests' }) => {
+  const { ask, dialog: actionDialog } = useActionPrompt();
   // ===== Tab state =====
   const [activeTab, setActiveTab] = useState<'create' | 'requests' | 'history'>(defaultTab);
 
@@ -111,7 +113,7 @@ const RepairRequest: React.FC<RepairRequestProps> = ({ defaultTab = 'requests' }
         sessionStorage.removeItem('repairDeviceId');
         return prefilledId;
       }
-      return current || (devices.length > 0 ? devices[0].id : '');
+      return current;
     });
   }, [devices]);
 
@@ -197,7 +199,6 @@ const RepairRequest: React.FC<RepairRequestProps> = ({ defaultTab = 'requests' }
         if (newId) {
           setDeviceId(newId);
           setIsScanning(false);
-          scanner.clear();
           toast.success(`Đã nhận diện thiết bị: ${newId}`);
         }
       }, () => { /* ignore */ });
@@ -211,6 +212,7 @@ const RepairRequest: React.FC<RepairRequestProps> = ({ defaultTab = 'requests' }
   // ===== Submit repair =====
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     if (!description.trim() || !userEmail.trim() || !deviceId.trim()) {
       setMessage('Vui lòng điền đầy đủ Mã thiết bị, Mô tả và Email.');
       return;
@@ -256,7 +258,8 @@ const RepairRequest: React.FC<RepairRequestProps> = ({ defaultTab = 'requests' }
         setDescription('');
         setPriority('normal');
         setSelectedFiles([]);
-        if (devices.length > 0) setDeviceId(devices[0].id);
+        setDeviceId('');
+        setDeviceSearch('');
         if (response.repair) {
           const optimisticRepair = response.repair;
           mutateRepairs(currentRepairs => {
@@ -306,8 +309,8 @@ const RepairRequest: React.FC<RepairRequestProps> = ({ defaultTab = 'requests' }
   // ===== Approve/Reject repair =====
   const handleApproveRepair = async (repair: RepairData) => {
     if (!isAdmin) { toast.warning('Bạn không có quyền duyệt yêu cầu sửa chữa.'); return; }
-    // TODO: Consider replacing window.prompt with a custom Modal for better mobile UX
-    const note = window.prompt('Ghi chú duyệt (nếu có):') || '';
+    const note = await ask({ title: 'Duyệt yêu cầu sửa chữa', label: 'Ghi chú duyệt (nếu có)' });
+    if (note === null) return;
     const res = await approveRepair({
       rowId: repair.rowId,
       deviceId: repair.deviceId,
@@ -321,9 +324,8 @@ const RepairRequest: React.FC<RepairRequestProps> = ({ defaultTab = 'requests' }
 
   const handleRejectRepair = async (repair: RepairData) => {
     if (!isAdmin) { toast.warning('Bạn không có quyền từ chối yêu cầu sửa chữa.'); return; }
-    // TODO: Consider replacing window.prompt with a custom Modal for better mobile UX
-    const reasonText = window.prompt('Lý do từ chối báo hỏng/sửa chữa:') || '';
-    if (!reasonText.trim()) return;
+    const reasonText = await ask({ title: 'Từ chối sửa chữa', label: 'Lý do từ chối', required: true });
+    if (reasonText === null) return;
     const res = await approveRepair({
       rowId: repair.rowId,
       deviceId: repair.deviceId,
@@ -427,6 +429,7 @@ const RepairRequest: React.FC<RepairRequestProps> = ({ defaultTab = 'requests' }
 
   return (
     <div className="reports-page request-workspace request-workspace-repair">
+      {actionDialog}
       {/* ===== Page Header ===== */}
       <div className="page-header request-section-header">
         <div>
@@ -476,7 +479,7 @@ const RepairRequest: React.FC<RepairRequestProps> = ({ defaultTab = 'requests' }
 
             <form className="form-section request-form" onSubmit={handleSubmit}>
               <div className="request-field request-device-field">
-                <label className="input-label">Thiết bị báo hỏng</label>
+                <label className="input-label" htmlFor="repair-device">Thiết bị báo hỏng</label>
                 <Input
                   value={deviceSearch}
                   onChange={event => setDeviceSearch(event.target.value)}
@@ -485,6 +488,7 @@ const RepairRequest: React.FC<RepairRequestProps> = ({ defaultTab = 'requests' }
                 />
                 <div className="request-select-wrap">
                   <select
+                    id="repair-device"
                     value={deviceId}
                     onChange={e => setDeviceId(e.target.value)}
                     className="request-select"

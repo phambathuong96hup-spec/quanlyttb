@@ -25,3 +25,8 @@
     border-right: 0;
   }
 }
+
+@media (max-width: 899px) {
+  .ai-assistant-page { height: calc(100dvh - var(--header-height) - 100px - env(safe-area-inset-bottom)); min-height: 240px; }
+  .ai-space-frame { min-height: 0; }
+}

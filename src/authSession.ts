@@ -83,6 +83,9 @@ export const writeAuthSession = (user: Partial<AuthUser>): AuthState => {
 };
 
 export const clearAuthSession = () => {
+  const session = readAuthSession();
+  sessionStorage.removeItem(`qlttb.inventory_runs:${session.username}`);
+  sessionStorage.removeItem('repairDeviceId');
   sessionStorage.removeItem(AUTH_STORAGE_KEY);
   clearLegacyAuth();
 };

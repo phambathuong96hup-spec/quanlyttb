@@ -1,6 +1,7 @@
+import { useToast } from '../components/ui/Toast';
 import React, { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, AlertTriangle, RefreshCw, FileText, X, Save, Plus, Eye, Edit, Send, CalendarPlus } from 'lucide-react';
+import { ArrowLeft, AlertTriangle, RefreshCw, FileText, Save, Plus, Eye, Edit, Send, CalendarPlus } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { Card, CardBody, Button, Badge, type BadgeVariant, Tabs, Table, TableHead, TableBody, TableRow, TableHeader, TableCell, Modal, FileUploader } from '../components/ui';
 import { createTransfer, addDocument, markDocumentSent, renewDocument, type DeviceDocument } from '../services/api';
@@ -15,6 +16,7 @@ import { EvidenceLinks } from '../components/EvidenceLinks';
 import './Devices.css';
 
 const DeviceProfile: React.FC = () => {
+  const toast = useToast();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { isAuthenticated, username } = useAuth();
@@ -56,6 +58,7 @@ const DeviceProfile: React.FC = () => {
   const [updatingDocumentId, setUpdatingDocumentId] = useState<string | null>(null);
   
   // File upload
+  const [isTransferring, setIsTransferring] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   
   // Form tài liệu
@@ -84,21 +87,27 @@ const DeviceProfile: React.FC = () => {
       navigate('/login', { state: { from: { pathname: `/devices/${id}` } } });
       return;
     }
-    if (!newDept.trim()) { alert('Vui lòng nhập khoa/phòng đích.'); return; }
-    if (!device) return;
-    const res = await createTransfer({
-      deviceId: device.id,
-      toDepartment: newDept,
-      reason: transferNote,
-      actorUsername: username,
-    });
-    alert((res.success ? '✅ ' : '❌ ') + (res.message || 'Có lỗi xảy ra.'));
-    if (res.success) {
-      await refetchTransfers();
-      setShowTransferModal(false);
-      setNewDept('');
-      setTransferNote('');
-    }
+    if (!newDept.trim()) { toast.warning('Vui lòng nhập khoa/phòng đích.'); return; }
+    if (!device || isTransferring) return;
+    setIsTransferring(true);
+    try {
+      const res = await createTransfer({
+        deviceId: device.id,
+        toDepartment: newDept,
+        reason: transferNote,
+        actorUsername: username,
+      });
+      if (res.success) toast.success(res.message || 'Đã lưu thay đổi.');
+      else toast.error(res.message || 'Có lỗi xảy ra.');
+      if (res.success) {
+        await refetchTransfers();
+        setShowTransferModal(false);
+        setNewDept('');
+        setTransferNote('');
+      }
+    } catch {
+      toast.error('Không gửi được yêu cầu điều chuyển. Nội dung đã được giữ lại để thử lại.');
+    } finally { setIsTransferring(false); }
   };
 
   const generalInfoTab = (
@@ -318,7 +327,7 @@ const DeviceProfile: React.FC = () => {
     e.preventDefault();
     if (!device) return;
     if (!docType.trim()) {
-      alert('Vui lòng chọn hoặc nhập Loại tài liệu.');
+      toast.warning('Vui lòng chọn hoặc nhập Loại tài liệu.');
       return;
     }
     if (docModalMode === 'add') {
@@ -330,12 +339,12 @@ const DeviceProfile: React.FC = () => {
         const suggestedAction = isRegistrationDocumentType(duplicateActiveDocument.docType)
           ? '“Gia hạn đăng kiểm” hoặc “Sửa”'
           : '“Sửa”';
-        alert(`Loại tài liệu này đã tồn tại. Vui lòng dùng nút ${suggestedAction} trên hồ sơ hiện tại.`);
+        toast.warning(`Loại tài liệu này đã tồn tại. Vui lòng dùng nút ${suggestedAction} trên hồ sơ hiện tại.`);
         return;
       }
     }
     if (docModalMode === 'renew' && !expiryDate) {
-      alert('Vui lòng nhập hạn đăng kiểm mới.');
+      toast.warning('Vui lòng nhập hạn đăng kiểm mới.');
       return;
     }
 
@@ -347,7 +356,7 @@ const DeviceProfile: React.FC = () => {
 
       if (selectedFile) {
         if (selectedFile.size > 10 * 1024 * 1024) {
-          alert('Kích thước file quá lớn (tối đa 10MB).');
+          toast.warning('Kích thước file quá lớn (tối đa 10MB).');
           setIsUploading(false);
           return;
         }
@@ -377,7 +386,8 @@ const DeviceProfile: React.FC = () => {
         ? await renewDocument({ ...documentPayload, expiryDate: documentPayload.expiryDate })
         : await addDocument(documentPayload);
 
-      alert((res.success ? '✅ ' : '❌ ') + (res.message || 'Có lỗi xảy ra.'));
+      if (res.success) toast.success(res.message || 'Đã lưu thay đổi.');
+      else toast.error(res.message || 'Có lỗi xảy ra.');
       if (res.success) {
         await refetchDevices();
         setShowDocModal(false);
@@ -385,7 +395,7 @@ const DeviceProfile: React.FC = () => {
       }
     } catch (err) {
       console.error(err);
-      alert('❌ Đã xảy ra lỗi trong quá trình lưu tài liệu.');
+      toast.warning('❌ Đã xảy ra lỗi trong quá trình lưu tài liệu.');
     } finally {
       setIsUploading(false);
     }
@@ -398,11 +408,12 @@ const DeviceProfile: React.FC = () => {
     setUpdatingDocumentId(updateKey);
     try {
       const res = await markDocumentSent(device.id, doc.docType, today, doc.documentId);
-      alert((res.success ? '✅ ' : '❌ ') + (res.message || 'Có lỗi xảy ra.'));
+      if (res.success) toast.success(res.message || 'Đã lưu thay đổi.');
+      else toast.error(res.message || 'Có lỗi xảy ra.');
       if (res.success) await refetchDevices();
     } catch (err) {
       console.error(err);
-      alert('❌ Không thể cập nhật trạng thái gửi đăng kiểm.');
+      toast.warning('❌ Không thể cập nhật trạng thái gửi đăng kiểm.');
     } finally {
       setUpdatingDocumentId(null);
     }
@@ -666,18 +677,12 @@ const DeviceProfile: React.FC = () => {
       </Card>
 
       {/* Modal điều chuyển khoa */}
-      {showTransferModal && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
-          <div style={{ background: 'white', borderRadius: '12px', width: '100%', maxWidth: '440px', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '20px 24px', borderBottom: '1px solid var(--border)' }}>
-              <h2 style={{ margin: 0, fontSize: '1.1rem' }}>🔄 Yêu cầu điều chuyển thiết bị</h2>
-              <button onClick={() => setShowTransferModal(false)} style={{ background: 'none', border: 'none', cursor: 'pointer' }}><X size={22} /></button>
-            </div>
-            <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+      <Modal isOpen={showTransferModal} onClose={() => { if (!isTransferring) setShowTransferModal(false); }} title="Yêu cầu điều chuyển thiết bị" size="sm">
+            <div style={{ padding: '0', display: 'flex', flexDirection: 'column', gap: '16px' }}>
               <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Thiết bị: <strong>{device?.name}</strong> ({device?.id})</p>
               <div>
-                <label style={{ display: 'block', fontWeight: '600', marginBottom: '6px', fontSize: '0.9rem' }}>Khoa/phòng đích *</label>
-                <input value={newDept} onChange={e => setNewDept(e.target.value)} placeholder="VD: Khoa Phẫu thuật"
+                <label htmlFor="profile-target-department" style={{ display: 'block', fontWeight: '600', marginBottom: '6px', fontSize: '0.9rem' }}>Khoa/phòng đích *</label>
+                <input id="profile-target-department" value={newDept} onChange={e => setNewDept(e.target.value)} placeholder="VD: Khoa Phẫu thuật"
                   list="profile-transfer-depts"
                   style={{ width: '100%', padding: '10px 14px', border: '1.5px solid var(--border)', borderRadius: '8px', fontSize: '0.95rem', boxSizing: 'border-box' }} />
                 <datalist id="profile-transfer-depts">
@@ -685,18 +690,16 @@ const DeviceProfile: React.FC = () => {
                 </datalist>
               </div>
               <div>
-                <label style={{ display: 'block', fontWeight: '600', marginBottom: '6px', fontSize: '0.9rem' }}>Ghi chú</label>
-                <textarea value={transferNote} onChange={e => setTransferNote(e.target.value)} rows={3} placeholder="Lý do điều chuyển..."
+                <label htmlFor="profile-transfer-note" style={{ display: 'block', fontWeight: '600', marginBottom: '6px', fontSize: '0.9rem' }}>Ghi chú</label>
+                <textarea id="profile-transfer-note" value={transferNote} onChange={e => setTransferNote(e.target.value)} rows={3} placeholder="Lý do điều chuyển..."
                   style={{ width: '100%', padding: '10px 14px', border: '1.5px solid var(--border)', borderRadius: '8px', fontSize: '0.95rem', boxSizing: 'border-box', resize: 'vertical' }} />
               </div>
               <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
-                <Button variant="secondary" onClick={() => setShowTransferModal(false)}>Hủy</Button>
-                <Button variant="primary" icon={<Save size={16} />} onClick={handleTransfer}>Ghi nhận điều chuyển</Button>
+                <Button variant="secondary" disabled={isTransferring} onClick={() => setShowTransferModal(false)}>Hủy</Button>
+                <Button variant="primary" icon={<Save size={16} />} onClick={handleTransfer} disabled={isTransferring}>Ghi nhận điều chuyển</Button>
               </div>
             </div>
-          </div>
-        </div>
-      )}
+      </Modal>
 
       {/* Modal thêm/sửa tài liệu */}
       {showDocModal && (

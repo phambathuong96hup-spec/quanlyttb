@@ -156,12 +156,44 @@ export const readFileAsBase64 = (file: File): Promise<string> => new Promise((re
   reader.readAsDataURL(file);
 });
 
-export const buildAttachmentPayloads = (
+export const optimizeImageForUpload = async (file: File): Promise<File> => {
+  if (!file.type.startsWith('image/') || typeof createImageBitmap === 'undefined') return file;
+  let bitmap: ImageBitmap | undefined;
+  try {
+    bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, 1600 / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const context = canvas.getContext('2d');
+    if (!context) return file;
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    let blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/webp', 0.85));
+    if (!blob || blob.type !== 'image/webp') {
+      context.globalCompositeOperation = 'destination-over';
+      context.fillStyle = '#fff';
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.85));
+    }
+    if (!blob || blob.size >= file.size) return file;
+    const extension = blob.type === 'image/webp' ? '.webp' : '.jpg';
+    return new File([blob], file.name.replace(/\.[^.]+$/, '') + extension, { type: blob.type, lastModified: file.lastModified });
+  } catch {
+    // Keep the original when the browser cannot decode or encode this format.
+    return file;
+  } finally {
+    bitmap?.close();
+  }
+};
+
+export const buildAttachmentPayloads = async (
   files: File[],
   readContent: (file: File) => Promise<string> = readFileAsBase64
-): Promise<RepairAttachmentPayload[]> => Promise.all(files.map(async file => ({
-  name: file.name,
-  mimeType: getAttachmentMimeType(file),
-  size: file.size,
-  content: await readContent(file),
-})));
+): Promise<RepairAttachmentPayload[]> => {
+  const payloads: RepairAttachmentPayload[] = [];
+  for (const original of files) {
+    const file = await optimizeImageForUpload(original);
+    payloads.push({ name: file.name, mimeType: getAttachmentMimeType(file), size: file.size, content: await readContent(file) });
+  }
+  return payloads;
+};

@@ -18,9 +18,11 @@ import './Sidebar.css';
 
 interface SidebarProps {
   isOpen: boolean;
+  isMobile?: boolean;
+  onNavigate?: () => void;
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
+const Sidebar: React.FC<SidebarProps> = ({ isOpen, isMobile, onNavigate }) => {
   const { isAuthenticated } = useAuth();
   const navigate = useNavigate();
 
@@ -40,6 +42,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
 
 
   const handlePrivateClick = (e: React.MouseEvent, path: string, isPrivate: boolean) => {
+    onNavigate?.();
     if (isPrivate && !isAuthenticated) {
       e.preventDefault();
       navigate('/login', { state: { from: { pathname: path } } });
@@ -47,7 +50,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen }) => {
   };
 
   return (
-    <aside className={`sidebar ${!isOpen ? 'collapsed' : ''}`}>
+    <aside id="app-sidebar" inert={isMobile && !isOpen} className={`sidebar ${!isOpen ? 'collapsed' : ''}`}>
       <div className="sidebar-header">
         <Pill size={28} className="sidebar-logo-icon" />
         <span className="sidebar-title" style={{ fontSize: '0.9rem' }}>

@@ -270,7 +270,7 @@ const TopNav: React.FC<TopNavProps> = ({ toggleSidebar }) => {
   return (
     <header className="topnav">
       <div className="topnav-left">
-        <button className="menu-toggle" onClick={toggleSidebar}>
+        <button className="menu-toggle" onClick={event => { event.currentTarget.focus(); toggleSidebar(); }} aria-label="Mở hoặc đóng menu" aria-controls="app-sidebar">
           <Menu size={24} />
         </button>
       </div>

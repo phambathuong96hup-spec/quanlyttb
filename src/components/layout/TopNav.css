@@ -599,3 +599,11 @@
     grid-template-columns: 1fr;
   }
 }
+
+@media (max-width: 500px) {
+  .topnav { padding: 8px 10px; height: auto; flex-shrink: 0; flex-wrap: wrap; gap: 8px; }
+  .topnav-center { order: 3; flex-basis: 100%; max-width: none; margin: 0; }
+  .search-bar { min-width: 0; }
+  .search-input { width: 100%; min-width: 0; font-size: 16px; }
+  .menu-toggle, .nav-action-btn { min-height: 44px; min-width: 44px; }
+}

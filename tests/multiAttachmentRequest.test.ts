@@ -88,7 +88,7 @@ test('attachment selection accepts supported media and enforces count and size l
   assert.match(totalLimitSelection.errors[0], /tổng dung lượng/i);
 });
 
-test('attachment payloads are prepared concurrently and preserve selection order', async () => {
+test('attachment payloads are prepared one at a time to limit memory and preserve selection order', async () => {
   assert.equal(existsSync(utilityPath), true, 'Chưa có tiện ích chuẩn bị payload theo lô');
   const { buildAttachmentPayloads } = await import('../src/utils/attachmentUtils.ts');
   const files = [
@@ -106,7 +106,7 @@ test('attachment payloads are prepared concurrently and preserve selection order
   });
 
   await Promise.resolve();
-  assert.deepEqual(started, ['anh-1.jpg', 'video-1.mp4']);
+  assert.deepEqual(started, ['anh-1.jpg']);
   releaseReaders();
 
   assert.deepEqual(await pendingPayloads, [

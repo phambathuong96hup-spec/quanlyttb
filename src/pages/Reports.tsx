@@ -1,3 +1,4 @@
+import { useToast } from '../components/ui/Toast';
 import React, { useMemo, useState } from 'react';
 import {
   FileText,
@@ -191,6 +192,7 @@ const formatInspectionDays = (row: InspectionRow) => {
 const toPdfText = (value: unknown) => removeVietnameseTones(String(value ?? ''));
 
 const Reports: React.FC = () => {
+  const toast = useToast();
   const { devices, isLoading: isDevicesLoading } = useDevices();
   const { repairs, isLoading: isRepairsLoading } = useRepairs();
   const isLoading = isDevicesLoading || isRepairsLoading;
@@ -287,20 +289,20 @@ const Reports: React.FC = () => {
   const handleExportCsv = () => {
     let exportData: CsvRow[] = [];
     if (activeMainTab === 'thong-ke') {
-      if (activeRepairs.length === 0) return alert('Không có dữ liệu.');
+      if (activeRepairs.length === 0) return toast.warning('Không có dữ liệu.');
       exportData = activeRepairs.map((r, i) => {
         const d = getDeviceDetails(r.deviceId);
         return { STT: i+1, 'Ngày báo hỏng': r.rowId, 'Thiết bị': d ? d.name : 'Unknown', 'Mô tả lỗi': r.description, 'Tình trạng': r.status };
       });
     } else {
       if (subTab === 'sua-xong') {
-        if (completedRepairs.length === 0) return alert('Không có dữ liệu.');
+        if (completedRepairs.length === 0) return toast.warning('Không có dữ liệu.');
         exportData = completedRepairs.map((r, i) => {
           const d = getDeviceDetails(r.deviceId);
           return { STT: i+1, 'Ngày hoàn thành': r.rowId, 'Thiết bị': d ? d.name : 'Unknown', 'Mô tả': r.description, 'Trạng thái': r.status };
         });
       } else {
-        if (filteredInspectionRows.length === 0) return alert('Không có dữ liệu.');
+        if (filteredInspectionRows.length === 0) return toast.warning('Không có dữ liệu.');
         exportData = filteredInspectionRows.map((row, i) => ({
           STT: i + 1,
           'Mã TB': row.deviceId,

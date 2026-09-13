@@ -1,3 +1,4 @@
+import { useActionPrompt } from '../hooks/useActionPrompt';
 import React, { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import { CheckCircle, Download, FileText, Loader2, RefreshCw, Repeat2, Send, XCircle, X, Camera, Search, ShieldCheck, Sparkles } from 'lucide-react';
 import { Card, CardBody, Button, Input, Table, TableHead, TableBody, TableRow, TableHeader, TableCell, Badge, useToast, FileUploader, Modal } from '../components/ui';
@@ -30,6 +31,7 @@ interface TransfersProps {
 }
 
 const Transfers: React.FC<TransfersProps> = ({ defaultTab = 'requests' }) => {
+  const { ask, dialog: actionDialog } = useActionPrompt();
   const { devices, isLoading: isDevicesLoading, refetch: refetchDevices } = useDevices();
   const { transfers, isLoading: isTransfersLoading, refetch: refetchTransfers } = useTransfers();
   const isLoading = isDevicesLoading || isTransfersLoading;
@@ -387,24 +389,22 @@ const Transfers: React.FC<TransfersProps> = ({ defaultTab = 'requests' }) => {
   };
 
   const handleReject = async (transfer: TransferData) => {
-    // TODO: Consider replacing window.prompt with a custom Modal for better mobile UX
-    const reasonText = window.prompt('Lý do từ chối tiếp nhận thiết bị:') || '';
-    if (!reasonText.trim()) return;
+    const reasonText = await ask({ title: 'Từ chối tiếp nhận thiết bị', label: 'Lý do từ chối', required: true });
+    if (reasonText === null) return;
     const response = await rejectTransfer({ transferId: transfer.transferId, actorUsername: username, reason: reasonText });
     toast.info(response.message || (response.success ? 'Đã từ chối.' : 'Có lỗi xảy ra.'));
     await loadData();
   };
 
   const handleCancel = async (transfer: TransferData) => {
-    // TODO: Consider replacing window.confirm with a custom Modal for better mobile UX
-    if (!window.confirm('Bạn có chắc chắn muốn thu hồi yêu cầu chuyển giao này?')) return;
+    if (await ask({ title: 'Thu hồi yêu cầu', description: 'Bạn có chắc chắn muốn thu hồi yêu cầu chuyển giao này?' }) === null) return;
     const response = await cancelTransfer({ transferId: transfer.transferId, actorUsername: username, reason: 'Người tạo yêu cầu hủy' });
     toast.info(response.message || (response.success ? 'Đã hủy.' : 'Có lỗi xảy ra.'));
     await loadData();
   };
 
   const handleReturnDevice = async (transfer: TransferData) => {
-    if (!window.confirm(`Bạn muốn hoàn trả thiết bị ${transfer.deviceName || transfer.deviceId} về khoa ${transfer.fromDepartment}?`)) return;
+    if (await ask({ title: 'Hoàn trả thiết bị', description: `Bạn muốn hoàn trả thiết bị ${transfer.deviceName || transfer.deviceId} về khoa ${transfer.fromDepartment}?` }) === null) return;
     
     const response = await createTransfer({ 
       deviceId: transfer.deviceId, 
@@ -470,6 +470,7 @@ const Transfers: React.FC<TransfersProps> = ({ defaultTab = 'requests' }) => {
 
   return (
     <div className="transfers-page request-workspace request-workspace-transfer">
+      {actionDialog}
       <div className="page-header request-section-header">
         <div>
           <h1 className="page-title request-section-title">

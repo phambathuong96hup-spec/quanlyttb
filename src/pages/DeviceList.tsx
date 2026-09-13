@@ -52,8 +52,9 @@ const splitDeviceCodes = (value: unknown) => String(value || '')
   .filter(Boolean);
 
 const DeviceList: React.FC = () => {
-  const { devices, isLoading, refetch } = useDevices();
+  const { devices, isLoading, error, lastUpdated, refetch } = useDevices();
 
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [departmentFilter, setDepartmentFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState<DeviceStatusFilter>('all');
@@ -317,6 +318,11 @@ const DeviceList: React.FC = () => {
         </div>
       </div>
 
+      <div className="device-freshness" aria-live="polite">
+        <span>{lastUpdated ? `Cập nhật lúc: ${new Date(lastUpdated).toLocaleString('vi-VN')}` : 'Chưa tải được dữ liệu'}</span>
+        <Button variant="secondary" onClick={refetch} disabled={isLoading}>Làm mới dữ liệu</Button>
+      </div>
+      {error && <p role="alert">Không tải được dữ liệu: {error.message}. Dữ liệu đang hiển thị có thể chưa cập nhật.</p>}
       <div className="stats-grid">
         <Card className="stat-card primary-gradient">
           <div className="stat-icon-wrapper"><Monitor size={28} /></div>
@@ -369,7 +375,10 @@ const DeviceList: React.FC = () => {
 
       <Card>
         <div className="toolbar" style={{ padding: '20px', paddingBottom: '12px' }}>
-          <div className="filter-group">
+          <Button className="mobile-filter-toggle" variant="secondary" aria-expanded={filtersOpen} aria-controls="device-filters" onClick={() => setFiltersOpen(value => !value)}>
+            Bộ lọc{departmentFilter !== 'all' || statusFilter !== 'all' ? ' · Đang áp dụng' : ''}
+          </Button>
+          <div id="device-filters" className={`filter-group ${filtersOpen ? 'filters-open' : ''}`}>
             <select aria-label="Lọc theo khoa/phòng" className="filter-select" value={departmentFilter} onChange={e => setDepartmentFilter(e.target.value)}>
               <option value="all">Tất cả khoa/phòng</option>
               {uniqueDepartments.map(dept => <option key={dept} value={dept}>{dept}</option>)}
