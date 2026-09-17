@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
-const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbxhaOjofUhw78hxAbg7P3LcQcMRHHqPQvzU67TaoVReUCGHi_-y060TzSgvGlS3HO8KSQ/exec';
+const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwlvL63EEQlg_04HAUiABotRaS0E6YHdbGOEWy0MiHznQZ3cVYHwMixr-iJuiQFDa2QOw/exec';
 
 const endpoint = process.argv[2] || process.env.VITE_THIET_BI_API_URL || DEFAULT_ENDPOINT;
 const username = process.argv[3] || process.env.QLTTB_IMPORT_USERNAME || '';

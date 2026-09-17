@@ -4,8 +4,8 @@ import { parseVietnameseDate } from '../utils/dateUtils.ts';
 import { isArchivedDocumentStatus } from '../utils/documentWorkflow.ts';
 import { unwrapAppsScriptReadResponse } from './apiEnvelope.ts';
 
-// WARNING: Hardcoding the GAS URL/key here is a security risk. In production, always use env variables.
-const DEFAULT_GOOGLE_SHEETS_API_URL = 'https://script.google.com/macros/s/AKfycbxhaOjofUhw78hxAbg7P3LcQcMRHHqPQvzU67TaoVReUCGHi_-y060TzSgvGlS3HO8KSQ/exec';
+// Public API endpoint; authentication is enforced by the Apps Script backend.
+const DEFAULT_GOOGLE_SHEETS_API_URL = 'https://script.google.com/macros/s/AKfycbwlvL63EEQlg_04HAUiABotRaS0E6YHdbGOEWy0MiHznQZ3cVYHwMixr-iJuiQFDa2QOw/exec';
 
 const ENV = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {};
 export const GOOGLE_SHEETS_API_URL = ENV.VITE_THIET_BI_API_URL || DEFAULT_GOOGLE_SHEETS_API_URL;
@@ -214,11 +214,33 @@ export interface RepairAttachmentPayload {
   content: string;
 }
 
+export type ApiErrorCode = 'TIMEOUT' | 'NETWORK_ERROR' | 'SESSION_EXPIRED' | 'PARSE_ERROR' | 'HTTP_ERROR' | 'CANCELLED' | 'CLIENT_STORAGE_ERROR' | 'UNKNOWN';
+
+export class ApiTimeoutError extends Error {
+  code: ApiErrorCode = 'TIMEOUT';
+  constructor(message = 'Quá thời gian chờ phản hồi.') {
+    super(message);
+    this.name = 'ApiTimeoutError';
+  }
+}
+
+const configuredTimeout = (value: string | undefined, fallback: number) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 1000 && parsed <= 600000 ? parsed : fallback;
+};
+export const DEFAULT_API_TIMEOUT_MS = configuredTimeout(ENV.VITE_API_TIMEOUT_MS, 30000);
+export const UPLOAD_API_TIMEOUT_MS = configuredTimeout(ENV.VITE_UPLOAD_TIMEOUT_MS, 120000);
+
+export const generateRequestId = (prefix = 'REQ'): string => {
+  return `${prefix}-${crypto.randomUUID()}`;
+};
+
 export interface ReportRepairPayload extends Record<string, unknown> {
   deviceId: string;
   userName: string;
   userEmail: string;
   description: string;
+  requestId?: string;
   attachments?: RepairAttachmentPayload[];
   imageContent?: string;
   imageName?: string;
@@ -229,8 +251,17 @@ export interface ReportRepairResponse {
   success: boolean;
   message?: string;
   repair?: RepairData;
+  repairRowId?: string;
+  partialSuccess?: boolean;
+  syncStatus?: 'completed' | 'pending' | 'unknown';
+  needsManualReview?: boolean;
+  resultUnknown?: boolean;
+  requestId?: string;
+  syncId?: string;
   attachmentCount?: number;
   attachmentFailures?: string[];
+  idempotentReplay?: boolean;
+  errorCode?: ApiErrorCode;
 }
 
 export interface TransferData {
@@ -259,61 +290,127 @@ export interface TransferData {
   updatedAt: string;
 }
 
-// Hàm helper xử lý lỗi fetch chung
-const safeFetch = async (input: RequestInfo, init?: RequestInit) => {
+export interface SafeFetchOptions extends RequestInit {
+  timeoutMs?: number;
+}
+
+export interface PostActionOptions {
+  timeoutMs?: number;
+  requestId?: string;
+}
+
+// Hàm helper xử lý fetch với AbortController và dọn dẹp timer trong finally
+const apiError = (message: string, code: ApiErrorCode) => Object.assign(new Error(message), { code });
+
+export const safeFetch = async (input: RequestInfo, init: SafeFetchOptions = {}) => {
+  const { timeoutMs = DEFAULT_API_TIMEOUT_MS, signal: externalSignal, ...requestInit } = init;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new RangeError('Invalid request timeout');
+  if (externalSignal?.aborted) throw new DOMException('Request cancelled', 'AbortError');
+  const controller = new AbortController();
+  let timedOut = false;
+  const cancel = () => controller.abort();
+  externalSignal?.addEventListener('abort', cancel, { once: true });
+  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
   try {
-    const response = await fetch(input, init);
-    if (!response.ok) {
-      const text = await response.text();
-      if (response.status === 401 || response.status === 403) invalidateAuthSession();
-      console.error(`HTTP Error ${response.status}:`, text);
-      throw new Error(`HTTP ${response.status}`);
+    const response = await fetch(input, { ...requestInit, signal: controller.signal });
+    if (response.status === 401 || response.status === 403) {
+      invalidateAuthSession();
+      throw apiError('Phiên đăng nhập đã hết hạn hoặc không có quyền truy cập.', 'SESSION_EXPIRED');
     }
+    if (!response.ok) throw apiError(`Máy chủ trả lỗi HTTP ${response.status}.`, 'HTTP_ERROR');
     const text = await response.text();
-    try {
-      const data = JSON.parse(text);
-      if (isInvalidSessionResponse(data)) {
-        invalidateAuthSession();
-      }
-      if (data && typeof data === 'object' && data.success === false) {
-        console.warn('API returned success=false:', data);
-      }
-      return data;
-    } catch {
-      console.error('Failed to parse JSON response. Response text was:', text);
-      throw new Error('Invalid JSON response');
+    let data;
+    try { data = JSON.parse(text); }
+    catch { throw apiError('Phản hồi máy chủ không đúng định dạng.', 'PARSE_ERROR'); }
+    if (isInvalidSessionResponse(data)) {
+      invalidateAuthSession();
+      throw apiError(String(data.message || 'Phiên đăng nhập đã hết hạn.'), 'SESSION_EXPIRED');
     }
+    return data;
   } catch (error) {
-    console.error('Fetch error:', error);
+    if (timedOut) throw new ApiTimeoutError('Quá thời gian chờ phản hồi.');
     throw error;
+  } finally {
+    clearTimeout(timer);
+    externalSignal?.removeEventListener('abort', cancel);
   }
 };
 
-const postAction = async (action: string, payload: Record<string, unknown> = {}) => {
+const IDEMPOTENT_ACTIONS = new Set(['reportRepair', 'createTransfer', 'createTransferTypeRequest', 'addDocument', 'renewDocument', 'uploadFormTemplate', 'submitForm']);
+const stablePayload = (value: unknown): unknown => {
+  if (value instanceof Date) return value.toISOString();
+  if (Array.isArray(value)) return value.map(stablePayload);
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value)
+    .sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, stablePayload(item)]));
+  return value;
+};
+
+// Store only a hash and request ID, never attachment contents or the session token.
+const pendingMutationKey = async (action: string, payload: Record<string, unknown>, username: string) => {
+  const businessPayload = Object.fromEntries(Object.entries(payload).filter(([key]) =>
+    !['requestId', 'request_id', 'actorUsername', 'sessionToken', 'token'].includes(key)));
+  const raw = JSON.stringify([username, action, stablePayload(businessPayload)]);
+  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw));
+  return `qlttb.pending_request:${Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, '0')).join('')}`;
+};
+
+export const postAction = async (
+  action: string,
+  payload: Record<string, unknown> = {},
+  options?: PostActionOptions
+) => {
+  const hasUpload = Boolean(payload.imageContent || payload.fileContent ||
+    (Array.isArray(payload.attachments) && payload.attachments.length));
+  const timeoutMs = options?.timeoutMs ?? (hasUpload ? UPLOAD_API_TIMEOUT_MS : DEFAULT_API_TIMEOUT_MS);
+  const auth = getAuthPayload();
+  let requestId = options?.requestId || String(payload.requestId || '');
+  let storageKey = '';
+  if (IDEMPOTENT_ACTIONS.has(action)) {
+    try {
+      storageKey = await pendingMutationKey(action, payload, auth.actorUsername);
+      requestId = sessionStorage.getItem(storageKey) || requestId || generateRequestId();
+      sessionStorage.setItem(storageKey, requestId);
+    } catch {
+      return { success: false, errorCode: 'CLIENT_STORAGE_ERROR', resultUnknown: false,
+        message: 'Không thể lưu mã yêu cầu an toàn trong trình duyệt. Chưa gửi dữ liệu; hãy kiểm tra quyền lưu trữ của trình duyệt.' };
+    }
+  }
   try {
     const data = await safeFetch(GOOGLE_SHEETS_API_URL, {
       method: 'POST',
-      // Note: text/plain is used as a workaround to avoid CORS preflight options requests with Google Apps Script
+      // GAS accepts text/plain without a CORS preflight.
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({
-        action,
-        payload: {
-          ...payload,
-          ...getAuthPayload(),
-        },
-      }),
+      body: JSON.stringify({ action, payload: { ...payload, ...auth, ...(requestId ? { requestId } : {}) } }),
+      timeoutMs,
     });
-    return data || { success: false, message: 'Lỗi không xác định.' };
-  } catch (err) {
-    return { success: false, message: 'Lỗi kết nối mạng: ' + (err instanceof Error ? err.message : String(err)) };
+    if (!data || typeof data !== 'object' || typeof data.success !== 'boolean') {
+      throw apiError('Không xác định được kết quả ghi dữ liệu.', 'PARSE_ERROR');
+    }
+    if (storageKey && data.success) {
+      // Failure to remove the key must not turn a committed operation into a network error.
+      try { sessionStorage.removeItem(storageKey); } catch { /* A subsequent replay remains safe. */ }
+    }
+    return { ...data, ...(requestId ? { requestId } : {}) };
+  } catch (err: unknown) {
+    const errorCode: ApiErrorCode = err instanceof ApiTimeoutError ? 'TIMEOUT'
+      : err instanceof DOMException && err.name === 'AbortError' ? 'CANCELLED'
+      : (err as { code?: ApiErrorCode })?.code || 'NETWORK_ERROR';
+    const resultUnknown = errorCode !== 'SESSION_EXPIRED';
+    const detail = err instanceof Error ? err.message : String(err);
+    const message = !resultUnknown ? detail
+      : requestId
+        ? 'Chưa xác định được kết quả trên máy chủ. Khi thử lại, hệ thống sẽ dùng cùng mã yêu cầu để tránh tạo trùng. Mã yêu cầu: ' + requestId
+        : 'Chưa xác định được kết quả trên máy chủ. Hãy tải lại danh sách để kiểm tra trước khi gửi một thao tác mới.';
+    return { success: false, errorCode, resultUnknown, requestId: requestId || undefined, message };
   }
 };
 
-const postReadAction = async <T = unknown>(action: string): Promise<T> => safeFetch(GOOGLE_SHEETS_API_URL, {
+const postReadAction = async <T = unknown>(action: string, options?: { timeoutMs?: number }): Promise<T> => safeFetch(GOOGLE_SHEETS_API_URL, {
   method: 'POST',
   // Note: text/plain is used as a workaround to avoid CORS preflight options requests with Google Apps Script
   headers: { 'Content-Type': 'text/plain;charset=utf-8' },
   body: JSON.stringify({ action, payload: getAuthPayload() }),
+  timeoutMs: options?.timeoutMs ?? DEFAULT_API_TIMEOUT_MS,
 }).then(response => unwrapAppsScriptReadResponse(response) as T);
 
 const parseDocuments = (rawDocs: unknown[]): DeviceDocument[] => {
@@ -453,8 +550,13 @@ export const fetchRepairs = async (): Promise<RepairData[]> => {
   }));
 };
 
-export const reportRepair = async (payload: ReportRepairPayload): Promise<ReportRepairResponse> => {
-  return postAction('reportRepair', payload) as Promise<ReportRepairResponse>;
+export const reportRepair = async (
+  payload: ReportRepairPayload,
+  options?: { requestId?: string; timeoutMs?: number }
+): Promise<ReportRepairResponse> => {
+  const reqId = options?.requestId || payload.requestId;
+  const timeoutMs = options?.timeoutMs ?? (payload.imageContent || (payload.attachments && payload.attachments.length > 0) ? UPLOAD_API_TIMEOUT_MS : DEFAULT_API_TIMEOUT_MS);
+  return postAction('reportRepair', payload, { requestId: reqId, timeoutMs }) as Promise<ReportRepairResponse>;
 };
 
 export const approveRepair = async (payload: { rowId: string; deviceId: string; newStatus: string; approver?: string; note?: string; imageContent?: string; imageName?: string; imageMimeType?: string }) => {
@@ -529,30 +631,42 @@ export const fetchTransfers = async (): Promise<TransferData[]> => {
   return (data as ApiRow[]).map(mapTransfer);
 };
 
-export const createTransfer = async (payload: {
-  deviceId: string;
-  toDepartment: string;
-  quantity?: string;
-  reason?: string;
-  actorUsername: string;
-  imageContent?: string;
-  imageName?: string;
-  imageMimeType?: string;
-}) => {
-  return postAction('createTransfer', payload);
+export const createTransfer = async (
+  payload: {
+    deviceId: string;
+    toDepartment: string;
+    quantity?: string;
+    reason?: string;
+    actorUsername: string;
+    imageContent?: string;
+    imageName?: string;
+    imageMimeType?: string;
+    requestId?: string;
+  },
+  options?: { requestId?: string; timeoutMs?: number }
+) => {
+  const reqId = options?.requestId || payload.requestId;
+  const timeoutMs = options?.timeoutMs ?? (payload.imageContent ? UPLOAD_API_TIMEOUT_MS : DEFAULT_API_TIMEOUT_MS);
+  return postAction('createTransfer', payload, { requestId: reqId, timeoutMs });
 };
 
-export const createTransferTypeRequest = async (payload: {
-  deviceType: string;
-  toDepartment: string;
-  quantity?: string;
-  reason?: string;
-  actorUsername: string;
-  imageContent?: string;
-  imageName?: string;
-  imageMimeType?: string;
-}) => {
-  return postAction('createTransferTypeRequest', payload);
+export const createTransferTypeRequest = async (
+  payload: {
+    deviceType: string;
+    toDepartment: string;
+    quantity?: string;
+    reason?: string;
+    actorUsername: string;
+    imageContent?: string;
+    imageName?: string;
+    imageMimeType?: string;
+    requestId?: string;
+  },
+  options?: { requestId?: string; timeoutMs?: number }
+) => {
+  const reqId = options?.requestId || payload.requestId;
+  const timeoutMs = options?.timeoutMs ?? (payload.imageContent ? UPLOAD_API_TIMEOUT_MS : DEFAULT_API_TIMEOUT_MS);
+  return postAction('createTransferTypeRequest', payload, { requestId: reqId, timeoutMs });
 };
 
 export const assignTransferDevice = async (payload: {
@@ -800,12 +914,34 @@ export interface SaveDocumentPayload extends Record<string, unknown> {
   mimeType?: string;
 }
 
-export const addDocument = async (payload: SaveDocumentPayload) => {
-  return postAction('addDocument', payload);
+export const addDocument = async (
+  payload: SaveDocumentPayload,
+  options?: { requestId?: string; timeoutMs?: number }
+) => {
+  const reqId = options?.requestId || (payload.requestId as string);
+  const timeoutMs = options?.timeoutMs ?? (payload.fileContent ? UPLOAD_API_TIMEOUT_MS : DEFAULT_API_TIMEOUT_MS);
+  return postAction('addDocument', payload, { requestId: reqId, timeoutMs });
 };
 
-export const renewDocument = async (payload: SaveDocumentPayload & { expiryDate: string }) => {
-  return postAction('renewDocument', payload);
+export const renewDocument = async (
+  payload: SaveDocumentPayload & { expiryDate: string },
+  options?: { requestId?: string; timeoutMs?: number }
+) => {
+  const reqId = options?.requestId || (payload.requestId as string);
+  const timeoutMs = options?.timeoutMs ?? (payload.fileContent ? UPLOAD_API_TIMEOUT_MS : DEFAULT_API_TIMEOUT_MS);
+  return postAction('renewDocument', payload, { requestId: reqId, timeoutMs });
+};
+
+export const reconcilePendingSyncs = async (
+  options?: { timeoutMs?: number }
+): Promise<{ success: boolean; message?: string; processed?: number; succeeded?: number; skipped?: number }> => {
+  return postAction('reconcilePendingSyncs', {}, { timeoutMs: options?.timeoutMs }) as Promise<{
+    success: boolean;
+    message?: string;
+    processed?: number;
+    succeeded?: number;
+    skipped?: number;
+  }>;
 };
 
 export const fetchDepartments = async (): Promise<string[]> => {

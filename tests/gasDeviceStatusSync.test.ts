@@ -18,5 +18,6 @@ test('reportRepair writes pharmacy broken reports as awaiting handling in Google
   assert.match(source, /normalizeHeader_\(department\)\.indexOf\('khoaduoc'\) !== -1/);
   assert.match(source, /function reportRepairDeviceStatus_\(device\)/);
   assert.match(source, /return isPharmacyDepartment_\(department\) \? 'Hỏng chờ xử lý' : 'Báo hỏng - chờ duyệt';/);
-  assert.match(source, /'Hiện trạng thực tế': reportRepairDeviceStatus_\(device\)/);
+  assert.match(source, /const targetStatus = reportRepairDeviceStatus_\(device\)/);
+  assert.match(source, /'Hiện trạng thực tế': targetStatus/);
 });

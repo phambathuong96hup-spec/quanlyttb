@@ -12,6 +12,7 @@ const Dashboard = lazy(() => import('./pages/Dashboard'));
 const Devices = lazy(() => import('./pages/DeviceList'));
 const DeviceDetails = lazy(() => import('./pages/DeviceProfile'));
 const Requests = lazy(() => import('./pages/Requests'));
+const FormLibrary = lazy(() => import('./pages/FormLibrary'));
 const TrackDevices = lazy(() => import('./pages/TrackDevices'));
 const InventoryQr = lazy(() => import('./pages/InventoryQr'));
 const NormsLookup = lazy(() => import('./pages/NormsLookup'));
@@ -67,6 +68,7 @@ function App() {
                   <Route path="devices/:id" element={<PrivateRoute><DeviceDetails /></PrivateRoute>} />
 
                   <Route path="requests" element={<PrivateRoute><Requests /></PrivateRoute>} />
+                  <Route path="forms" element={<PrivateRoute><FormLibrary /></PrivateRoute>} />
                   <Route path="repairs" element={<Navigate to="/requests?type=repair" replace />} />
                   <Route path="tracking" element={<PrivateRoute><TrackDevices /></PrivateRoute>} />
                   <Route path="inventory" element={<PrivateRoute><InventoryQr /></PrivateRoute>} />

@@ -127,12 +127,15 @@ test('Apps Script rejects spoofed media and removes already uploaded siblings at
   let createdFileIndex = 0;
   const createdFiles = new Map<string, Record<string, unknown>>();
   const evidenceFolder = {
+    getSharingAccess: () => 'PRIVATE',
+    getParents: () => ({ hasNext: () => false }),
     createFile: () => {
       const id = `evidence-${++createdFileIndex}`;
       const file = {
         getId: () => id,
         getUrl: () => `https://drive.example/${id}`,
         setSharing: () => undefined,
+        getSharingAccess: () => 'PRIVATE',
         setTrashed: () => { trashedFileIds.push(id); },
       };
       createdFiles.set(id, file);
@@ -155,7 +158,7 @@ test('Apps Script rejects spoofed media and removes already uploaded siblings at
       openById: () => ({ getId: () => 'spreadsheet-file' }),
     },
     DriveApp: {
-      Access: { ANYONE_WITH_LINK: 'ANYONE_WITH_LINK' },
+      Access: { PRIVATE: 'PRIVATE', ANYONE_WITH_LINK: 'ANYONE_WITH_LINK' },
       Permission: { VIEW: 'VIEW' },
       getFileById: (id: string) => id === 'spreadsheet-file' ? spreadsheetFile : createdFiles.get(id),
       getRootFolder: () => evidenceFolder,

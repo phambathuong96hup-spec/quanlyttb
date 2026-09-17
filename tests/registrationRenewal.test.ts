@@ -170,7 +170,7 @@ test('device profile makes sent state and renewal actions visible and convenient
 });
 
 test('Apps Script persists registration sent dates and handles renewal as an audited action', () => {
-  const source = readFileSync('gas/Code.gs', 'utf8');
+  const source = readFileSync('gas/Code.gs', 'utf8').replace(/\r\n/g, '\n');
   const updateStatusBody = source.match(/function updateDocStatus_\(payload, actor\) \{([\s\S]*?)\n\}\n\nfunction addDocument_/)?.[1] || '';
   const aggregateStatusBody = source.match(/function resolveDeviceAggregateStatus_\(device, docs\) \{([\s\S]*?)\n\}\n\nfunction syncDeviceAggregateStatusRow_/)?.[1] || '';
 

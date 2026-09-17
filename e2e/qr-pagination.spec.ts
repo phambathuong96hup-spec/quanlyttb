@@ -1,0 +1,31 @@
+import {test,expect} from '@playwright/test';
+import {mkdirSync} from 'node:fs';
+for(const count of [12,13,25,61]) test(`A4 QR printing keeps all ${count} devices across sheets`,async({page,browserName},info)=>{
+ const department='Khoa Hồi sức tích cực và Chống độc';
+ const devices=Array.from({length:count},(_,i)=>({id:`QR-${String(i+1).padStart(3,'0')};SERIAL-${i+1};ASSET-${i+1}`,'Tên Thiết bị':`Máy theo dõi bệnh nhân đa thông số có chức năng đo huyết áp và nồng độ oxy ${i+1}`,'Nơi đặt thiết bị':department,'Hiện trạng thực tế':'Đang sử dụng'}));
+ await page.addInitScript(()=>{sessionStorage.setItem('qlttb.auth',JSON.stringify({username:'qa',role:'Admin',name:'QA',token:'qa-token',expiresAt:Date.now()+3600000}));window.print=()=>{document.documentElement.dataset.printCalled='yes';};});
+ await page.route('**/macros/s/**/exec*',async route=>{const action=route.request().method()==='GET'?new URL(route.request().url()).searchParams.get('action'):route.request().postDataJSON().action;await route.fulfill({contentType:'application/json',body:JSON.stringify({success:true,data:action==='getDevices'?devices:[]})});});
+ await page.goto('/devices');await page.locator('#department-print-trigger').click();await page.getByLabel('Khoa/phòng cần in').selectOption(department);await page.getByRole('button',{name:`In ${count} mã QR`,exact:true}).click();
+ await expect(page.locator('html')).toHaveAttribute('data-print-called','yes');
+ await page.waitForTimeout(700);
+ await expect(page.locator('#print-area .print-qr-card')).toHaveCount(count);
+ await expect(page.locator('#print-area .qr-print-sheet')).toHaveCount(Math.ceil(count/12));
+ await page.emulateMedia({media:'print'});
+ for(let n=0;n<Math.ceil(count/12);n++) await expect(page.locator('.qr-print-sheet').nth(n).locator('.print-qr-card')).toHaveCount(Math.min(12,count-n*12));
+ const clipped=await page.locator('.print-qr-card').evaluateAll(cards=>cards.flatMap((card,i)=>Array.from(card.querySelectorAll<HTMLElement>('.print-qr-name,.print-qr-department,.print-qr-code-list')).filter(el=>el.scrollHeight>el.clientHeight+1 || el.scrollWidth>el.clientWidth+1 || el.getBoundingClientRect().bottom>card.getBoundingClientRect().bottom+1).map(el=>`${i}:${el.className}`)));
+ expect(clipped).toEqual([]);
+ await expect(page.locator('#print-area')).toContainText(`ASSET-${count}`);
+ mkdirSync('tmp/qr-print-review',{recursive:true});
+ if(browserName==='chromium') await page.pdf({path:`tmp/qr-print-review/${info.project.name}-${count}.pdf`,preferCSSPageSize:true,printBackground:true,displayHeaderFooter:false});
+ await page.evaluate(()=>window.dispatchEvent(new Event('afterprint')));
+ await expect(page.locator('#print-area')).toHaveCount(0);
+});
+test('oversized QR label stops printing instead of clipping adjacent labels',async({page})=>{
+ await page.addInitScript(()=>{sessionStorage.setItem('qlttb.auth',JSON.stringify({username:'qa',role:'Admin',token:'qa-token',expiresAt:Date.now()+3600000}));window.print=()=>{document.documentElement.dataset.printCalled='yes';};});
+ await page.route('**/macros/s/**/exec*',async route=>{const action=route.request().postDataJSON().action;await route.fulfill({contentType:'application/json',body:JSON.stringify({success:true,data:action==='getDevices'?[{id:'TOO-LONG','Tên Thiết bị':'Tên thiết bị quá dài '.repeat(250),'Nơi đặt thiết bị':'Khoa Nội'}]:[]})});});
+ await page.goto('/devices');await page.locator('#department-print-trigger').click();await page.getByLabel('Khoa/phòng cần in').selectOption('Khoa Nội');await page.getByRole('button',{name:'In 1 mã QR',exact:true}).click();
+ await expect(page.getByText(/Đã hủy in để tránh/)).toBeVisible({timeout:10000});
+ await expect(page.locator('#print-area')).toHaveCount(0,{timeout:10000});
+ await expect(page.locator('html')).not.toHaveAttribute('data-print-called','yes');
+ await expect(page.locator('body')).not.toHaveClass(/printing-device-qr/);
+});

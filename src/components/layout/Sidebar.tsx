@@ -34,6 +34,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, isMobile, onNavigate }) => {
 
   const privateItems = [
     { path: '/requests', name: 'Tạo yêu cầu', icon: ClipboardPlus, private: true },
+    { path: '/forms', name: 'Mẫu và phiếu', icon: BookOpen, private: true },
     { path: '/tracking', name: 'Theo dõi thiết bị', icon: Wrench, private: true },
     { path: '/inventory', name: 'Kiểm kê QR', icon: QrCode, private: true },
     { path: '/operations', name: 'Điều hành công việc', icon: ClipboardCheck, private: true },

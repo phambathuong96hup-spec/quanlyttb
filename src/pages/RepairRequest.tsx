@@ -5,7 +5,7 @@ import {
   CheckCircle, XCircle, Download, FileText, Loader2, RefreshCw, Wrench, Search, X
 } from 'lucide-react';
 import { Card, CardBody, Button, Input, Table, TableHead, TableBody, TableRow, TableHeader, TableCell, Badge, useToast, FileUploader, Modal } from '../components/ui';
-import { reportRepair, approveRepair, type RepairData } from '../services/api';
+import { reportRepair, approveRepair, generateRequestId, type RepairData } from '../services/api';
 import { useDevices } from '../hooks/useDevices';
 import { useRepairs } from '../hooks/useRepairs';
 import { useAuth } from '../authContext';
@@ -63,6 +63,11 @@ const RepairRequest: React.FC<RepairRequestProps> = ({ defaultTab = 'requests' }
   const [statusFile, setStatusFile] = useState<File | null>(null);
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
   const [submitStage, setSubmitStage] = useState<'idle' | 'preparing' | 'sending'>('idle');
+  const submissionRequestIdRef = React.useRef<string>('');
+
+  useEffect(() => {
+    submissionRequestIdRef.current = '';
+  }, [deviceId, description, priority, selectedFiles]);
 
   // ===== Repairs data =====
   const { repairs, isLoading: isRepairsLoading, refetch: refetchRepairs, mutate: mutateRepairs } = useRepairs();
@@ -231,6 +236,11 @@ const RepairRequest: React.FC<RepairRequestProps> = ({ defaultTab = 'requests' }
       isPreparingAttachments = false;
 
       setSubmitStage('sending');
+      if (!submissionRequestIdRef.current) {
+        submissionRequestIdRef.current = generateRequestId('REPAIR');
+      }
+      const currentRequestId = submissionRequestIdRef.current;
+
       const primaryAttachment = attachments[0];
       const submittedDeviceId = priority === 'urgent' ? `[KHẨN] ${deviceId}` : deviceId;
       const response = await reportRepair({
@@ -238,6 +248,7 @@ const RepairRequest: React.FC<RepairRequestProps> = ({ defaultTab = 'requests' }
         userName,
         userEmail,
         description,
+        requestId: currentRequestId,
         // Tệp đầu giữ giao thức cũ; các tệp còn lại dùng mảng mới. Payload không bị lặp Base64.
         attachments: attachments.slice(1),
         ...(primaryAttachment ? {
@@ -248,7 +259,20 @@ const RepairRequest: React.FC<RepairRequestProps> = ({ defaultTab = 'requests' }
       });
 
       if (response.success) {
-        toast.success('Yêu cầu báo hỏng đã được gửi thành công!');
+        submissionRequestIdRef.current = '';
+        const repairRowId = response.repairRowId || response.repair?.rowId || '';
+        if (response.syncStatus === 'pending' || response.partialSuccess) {
+          toast.warning(
+            response.message ||
+            `Đã ghi nhận phiếu sửa chữa (${repairRowId || 'thành công'}), nhưng trạng thái thiết bị đang chờ đối soát tự động.`
+          );
+        } else {
+          toast.success(
+            repairRowId
+              ? `Yêu cầu báo hỏng đã được gửi thành công! (Mã phiếu: ${repairRowId})`
+              : 'Yêu cầu báo hỏng đã được gửi thành công!'
+          );
+        }
         if (attachments.length > 1 && response.attachmentCount === undefined) {
           toast.warning('Máy chủ cũ chỉ nhận tệp đầu tiên. Cần cập nhật Apps Script để nhận toàn bộ ảnh/video.');
         }

@@ -1,16 +1,53 @@
 /**
  * Centralized date utilities for the Equipment Management app.
- * Handles Vietnamese date format (dd/MM/yyyy) parsing, formatting, and calculations.
+ * Handles Vietnamese date format (dd/MM/yyyy) parsing, formatting, and strict validation.
  */
 
 /**
+ * Check if a given year is a leap year.
+ */
+export const isLeapYear = (year: number): boolean => {
+  return (year % 4 === 0 && year % 100 !== 0) || (year % 400 === 0);
+};
+
+/**
+ * Get the maximum number of days in a given month (1-12) of a year.
+ */
+export const getDaysInMonth = (year: number, month: number): number => {
+  if (month < 1 || month > 12) return 0;
+  if (month === 2) {
+    return isLeapYear(year) ? 29 : 28;
+  }
+  if (month === 4 || month === 6 || month === 9 || month === 11) {
+    return 30;
+  }
+  return 31;
+};
+
+/**
+ * Validate that day is strictly valid for the given year and month.
+ */
+export const isValidDayInMonth = (year: number, month: number, day: number): boolean => {
+  const maxDays = getDaysInMonth(year, month);
+  return [year, month, day].every(Number.isInteger) && maxDays > 0 && day >= 1 && day <= maxDays;
+};
+
+/**
+ * Check if a string is a strictly valid Vietnamese date (dd/MM/yyyy).
+ */
+export const isValidVietnameseDate = (dateStr: string): boolean => {
+  return parseVietnameseDate(dateStr) !== null;
+};
+
+/**
  * Parse a Vietnamese date string (dd/MM/yyyy) into a Date object.
- * Returns null if the string is invalid or cannot be parsed.
+ * Returns null if the string is invalid, out of range, or does not exist (e.g. 31/02, 31/04).
  */
 export const parseVietnameseDate = (dateStr: string): Date | null => {
   if (!dateStr || typeof dateStr !== 'string') return null;
 
   const trimmed = dateStr.trim();
+  if (!/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(trimmed)) return null;
   const parts = trimmed.split('/');
   if (parts.length !== 3) return null;
 
@@ -19,12 +56,13 @@ export const parseVietnameseDate = (dateStr: string): Date | null => {
   const year = parseInt(parts[2], 10);
 
   if (isNaN(day) || isNaN(month) || isNaN(year)) return null;
-  if (day < 1 || day > 31 || month < 1 || month > 12 || year < 1900) return null;
+  if (year < 1900) return null;
+  if (!isValidDayInMonth(year, month, day)) return null;
 
   // Month is 0-indexed in JS Date
   const date = new Date(year, month - 1, day);
 
-  // Validate the date didn't overflow (e.g. Feb 31 → Mar 3)
+  // Validate the date didn't overflow
   if (
     date.getFullYear() !== year ||
     date.getMonth() !== month - 1 ||
@@ -37,35 +75,52 @@ export const parseVietnameseDate = (dateStr: string): Date | null => {
 };
 
 /**
+ * Check if a date string is valid under either Vietnamese or ISO format.
+ */
+export const isValidFlexibleDate = (dateStr: string): boolean => {
+  return parseFlexibleDate(dateStr) !== null;
+};
+
+/**
  * Parse common date strings returned by Google Sheets / Apps Script.
- * Supports dd/MM/yyyy, dd/MM/yyyy HH:mm:ss, ISO strings, and Date-compatible strings.
+ * Supports dd/MM/yyyy, dd/MM/yyyy HH:mm:ss, ISO strings (YYYY-MM-DD...), and Date-compatible strings.
+ * Strictly forbids rollover (e.g. 2026-02-31 will return null).
  */
 export const parseFlexibleDate = (dateStr: string): Date | null => {
-  if (!dateStr || typeof dateStr !== 'string') return null;
-
-  const trimmed = dateStr.trim();
-  const vnMatch = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
-  if (vnMatch) {
-    const [, dayText, monthText, yearText, hourText = '0', minuteText = '0', secondText = '0'] = vnMatch;
-    const day = parseInt(dayText, 10);
-    const month = parseInt(monthText, 10);
-    const year = parseInt(yearText, 10);
-    const hour = parseInt(hourText, 10);
-    const minute = parseInt(minuteText, 10);
-    const second = parseInt(secondText, 10);
-    const date = new Date(year, month - 1, day, hour, minute, second);
-    if (
-      date.getFullYear() === year &&
-      date.getMonth() === month - 1 &&
-      date.getDate() === day
-    ) {
-      return date;
-    }
-    return null;
+  if (typeof dateStr !== 'string') return null;
+  const value = dateStr.trim();
+  const vn = /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/.exec(value);
+  const iso = /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?(Z|[+-]\d{2}:?\d{2})?)?$/.exec(value);
+  if (!vn && !iso) {
+    // Date.toString() values from older Sheets exports have a fixed, explicit offset.
+    const legacy = /^(?:Sun|Mon|Tue|Wed|Thu|Fri|Sat) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{1,2}) (\d{4}) (\d{2}:\d{2}:\d{2}) GMT([+-]\d{4})(?: \([^\r\n]*\))?$/.exec(value);
+    if (!legacy) return null;
+    const month = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'].indexOf(legacy[1]) + 1;
+    return parseFlexibleDate(`${legacy[3]}-${String(month).padStart(2, '0')}-${legacy[2].padStart(2, '0')}T${legacy[4]}${legacy[5]}`);
   }
-
-  const fallback = new Date(trimmed);
-  return isNaN(fallback.getTime()) ? null : fallback;
+  const match = vn || iso!;
+  const year = Number(match[vn ? 3 : 1]);
+  const month = Number(match[2]);
+  const day = Number(match[vn ? 1 : 3]);
+  const hour = Number(match[4] || 0);
+  const minute = Number(match[5] || 0);
+  const second = Number(match[6] || 0);
+  const millisecond = iso ? Number((iso[7] || '').padEnd(3, '0')) : 0;
+  if (year < 1900 || !isValidDayInMonth(year, month, day) || hour > 23 || minute > 59 || second > 59) return null;
+  const zone = iso?.[8];
+  if (zone) {
+    let offset = 0;
+    if (zone !== 'Z') {
+      const digits = zone.slice(1).replace(':', '');
+      const offsetHour = Number(digits.slice(0, 2));
+      const offsetMinute = Number(digits.slice(2));
+      if (offsetHour > 23 || offsetMinute > 59) return null;
+      offset = (offsetHour * 60 + offsetMinute) * (zone[0] === '+' ? 1 : -1);
+    }
+    return new Date(Date.UTC(year, month - 1, day, hour, minute, second, millisecond) - offset * 60000);
+  }
+  // Date-only strings represent a calendar day, never UTC midnight.
+  return new Date(year, month - 1, day, hour, minute, second, millisecond);
 };
 
 /**
@@ -84,12 +139,12 @@ export const formatDateTimeVN = (date: Date): string => {
 };
 
 /**
- * Calculate the number of whole days remaining from today (start of day)
+ * Calculate the number of whole days remaining from baseDate/today (start of day)
  * to the target date (start of day).
  * Positive = future, Negative = past, 0 = today.
  */
-export const daysUntil = (target: Date): number => {
-  const now = new Date();
+export const daysUntil = (target: Date, baseDate?: Date): number => {
+  const now = baseDate || new Date();
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const targetStart = new Date(target.getFullYear(), target.getMonth(), target.getDate());
 

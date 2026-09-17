@@ -17,6 +17,7 @@ import { useDevices } from '../hooks/useDevices';
 import { useAuth } from '../authContext';
 import { exportCsv } from '../utils/exportCsv';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { createPortal } from 'react-dom';
 import { QRCodeSVG } from 'qrcode.react';
 import { matchSmartSearch } from '../utils/stringUtils';
 import {
@@ -94,13 +95,97 @@ const DeviceList: React.FC = () => {
   useEffect(() => {
     if (printingDevices.length === 0) return undefined;
 
-    const printTimer = window.setTimeout(() => {
-      window.print();
-      setPrintingDevices([]);
-    }, 500);
+    const printBodyClass = 'printing-device-qr';
+    document.body.classList.add(printBodyClass);
 
-    return () => window.clearTimeout(printTimer);
-  }, [printingDevices]);
+    let isMounted = true;
+
+    const handleAfterPrint = () => {
+      if (isMounted) {
+        setPrintingDevices([]);
+      }
+    };
+
+    window.addEventListener('afterprint', handleAfterPrint, { once: true });
+
+    const triggerPrint = async () => {
+      try {
+        if (document.fonts?.ready) {
+          await document.fonts.ready;
+        }
+      } catch {
+        // ignore font loading error
+      }
+
+      if (!isMounted) return;
+
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (!isMounted) return;
+
+          const printArea = document.getElementById('print-area');
+          if (!printArea) {
+            window.print();
+            return;
+          }
+
+          const cards = Array.from(printArea.querySelectorAll<HTMLElement>('.print-qr-card'));
+          let overflowDevice: { id: string; name: string } | null = null;
+
+          for (let i = 0; i < cards.length; i++) {
+            const card = cards[i];
+            const device = printingDevices[i];
+
+            // Measure if content exceeds card height (0.5px tolerance for subpixel rounding)
+            if (card.scrollHeight > card.clientHeight + 0.5) {
+              // Level 1: try compact styling
+              card.classList.add('is-compact');
+
+              // Check if still overflowing
+              if (card.scrollHeight > card.clientHeight + 0.5) {
+                // Level 2: try tightest styling (~7px minimum font, tighter spacing, QR >= 23mm)
+                card.classList.remove('is-compact');
+                card.classList.add('is-tight');
+
+                // Check if still overflowing after tightest readable settings
+                if (card.scrollHeight > card.clientHeight + 0.5) {
+                  const devId = card.getAttribute('data-device-id') || String(device?.id || '').trim();
+                  const devName = card.getAttribute('data-device-name') || String(device?.name || '').trim();
+                  overflowDevice = { id: devId || `Thiết bị #${i + 1}`, name: devName };
+                  break;
+                }
+              }
+            }
+          }
+
+          if (overflowDevice) {
+            toast.error(
+              `Nội dung thiết bị "${overflowDevice.id}"${overflowDevice.name ? ` (${overflowDevice.name})` : ''} vượt quá kích thước nhãn 12 tem/trang. Đã hủy in để tránh mất hoặc đè nội dung.`
+            );
+            window.removeEventListener('afterprint', handleAfterPrint);
+            document.body.classList.remove(printBodyClass);
+            setPrintingDevices([]);
+            return;
+          }
+
+          window.print();
+        });
+      });
+    };
+
+    const printTimer = window.setTimeout(() => {
+      void triggerPrint();
+    }, 100);
+
+    return () => {
+      isMounted = false;
+      if (printTimer) {
+        window.clearTimeout(printTimer);
+      }
+      window.removeEventListener('afterprint', handleAfterPrint);
+      document.body.classList.remove(printBodyClass);
+    };
+  }, [printingDevices, toast]);
 
   const departmentPrintOptions = useMemo(
     () => buildDepartmentQrPrintOptions(devices),
@@ -175,6 +260,15 @@ const DeviceList: React.FC = () => {
     () => filteredDevices.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage),
     [currentPage, filteredDevices],
   );
+
+  const QR_LABELS_PER_PAGE = 12;
+  const qrPrintPages = useMemo(() => {
+    const pages: DeviceData[][] = [];
+    for (let i = 0; i < printingDevices.length; i += QR_LABELS_PER_PAGE) {
+      pages.push(printingDevices.slice(i, i + QR_LABELS_PER_PAGE));
+    }
+    return pages;
+  }, [printingDevices]);
 
   const handlePrintSingleQR = (device: DeviceData) => setPrintingDevices([device]);
   const closeDepartmentPrintModal = () => {
@@ -576,31 +670,42 @@ const DeviceList: React.FC = () => {
         </div>
       </Card>
 
-      {/* QR Print Area */}
-      {printingDevices.length > 0 && (
-        <div id="print-area">
-          {printingDevices.map((device, index) => {
-            const qrUrl = `${window.location.origin}${import.meta.env.BASE_URL}devices/${encodeURIComponent(device.id)}`;
-            const deviceCodes = splitDeviceCodes(device.id);
-            const visibleCodes = (deviceCodes.length > 0 ? deviceCodes : [String(device.id || '')]).slice(0, 2);
-            const hiddenCodeCount = Math.max(0, deviceCodes.length - visibleCodes.length);
-            return (
-            <div className="print-page print-qr-card" key={`print-${device.id}-${index}`}>
-              <div className="print-qr-org">TTYT khu vực Thanh Ba</div>
-              <div className="print-qr-subtitle">Hệ thống QLTTB</div>
-              <QRCodeSVG value={qrUrl} size={96} level="M" />
-              <div className="print-qr-code-list">
-                {visibleCodes.map((code, codeIndex) => (
-                  <span key={`${code}-${codeIndex}`}>{code}</span>
-                ))}
-                {hiddenCodeCount > 0 && <span className="print-qr-hidden-count">+{hiddenCodeCount} mã</span>}
-              </div>
-              <div className="print-qr-name">{device.name}</div>
-              <div className="print-qr-department">{device.department}</div>
+      {/* QR Print Area: body portal dedicated print root */}
+      {typeof document !== 'undefined' && printingDevices.length > 0 && createPortal(
+        <div id="print-area" aria-hidden="true">
+          {qrPrintPages.map((sheetDevices, sheetIndex) => (
+            <div className="qr-print-sheet" key={`qr-sheet-${sheetIndex}`}>
+              {sheetDevices.map((device, deviceIndex) => {
+                const qrUrl = `${window.location.origin}${import.meta.env.BASE_URL}devices/${encodeURIComponent(device.id)}`;
+                const rawCodes = splitDeviceCodes(device.id);
+                const deviceCodes = rawCodes.length > 0 ? rawCodes : [String(device.id || '')];
+
+                return (
+                  <div
+                    className="print-qr-card print-page"
+                    key={`print-${device.id}-${sheetIndex}-${deviceIndex}`}
+                    data-device-id={device.id}
+                    data-device-name={device.name}
+                  >
+                    <div className="print-qr-org">TTYT khu vực Thanh Ba</div>
+                    <div className="print-qr-subtitle">Hệ thống QLTTB</div>
+                    <div className="print-qr-image-wrapper">
+                      <QRCodeSVG value={qrUrl} size={92} level="M" marginSize={4} />
+                    </div>
+                    <div className="print-qr-code-list">
+                      {deviceCodes.map((code, codeIndex) => (
+                        <span key={`${code}-${codeIndex}`}>{code}</span>
+                      ))}
+                    </div>
+                    <div className="print-qr-name">{device.name}</div>
+                    <div className="print-qr-department">{device.department}</div>
+                  </div>
+                );
+              })}
             </div>
-            );
-          })}
-        </div>
+          ))}
+        </div>,
+        document.body
       )}
 
       <Modal
@@ -629,7 +734,7 @@ const DeviceList: React.FC = () => {
               ))}
             </select>
             <p id="qr-print-department-help">
-              Bản in gồm toàn bộ thiết bị thuộc khoa/phòng đã chọn, không phụ thuộc bộ lọc đang hiển thị.
+              Bản in gồm toàn bộ thiết bị thuộc khoa/phòng đã chọn (in chuẩn 12 tem/trang A4), không phụ thuộc bộ lọc đang hiển thị.
             </p>
           </div>
 

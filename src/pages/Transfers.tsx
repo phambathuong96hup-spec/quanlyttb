@@ -10,6 +10,7 @@ import {
   receiveTransfer,
   rejectTransfer,
   cancelTransfer,
+  generateRequestId,
   type TransferData,
 } from '../services/api';
 import { useDevices } from '../hooks/useDevices';
@@ -52,6 +53,11 @@ const Transfers: React.FC<TransfersProps> = ({ defaultTab = 'requests' }) => {
 
   // File states
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const transferRequestIdRef = useRef<string>('');
+
+  useEffect(() => {
+    transferRequestIdRef.current = '';
+  }, [deviceId, deviceType, toDepartment, reason, selectedFile, transferType]);
   
   // Receive Modal states
   const [isReceiveModalOpen, setIsReceiveModalOpen] = useState(false);
@@ -285,6 +291,11 @@ const Transfers: React.FC<TransfersProps> = ({ defaultTab = 'requests' }) => {
       }
     }
     
+    if (!transferRequestIdRef.current) {
+      transferRequestIdRef.current = generateRequestId('XFER');
+    }
+    const currentRequestId = transferRequestIdRef.current;
+
     const finalReason = `[${transferType}] ${reason}`;
     const response = transferType === 'Trả'
       ? await createTransfer({
@@ -294,7 +305,8 @@ const Transfers: React.FC<TransfersProps> = ({ defaultTab = 'requests' }) => {
         actorUsername: username,
         imageContent,
         imageName,
-        imageMimeType
+        imageMimeType,
+        requestId: currentRequestId,
       })
       : await createTransferTypeRequest({
         deviceType,
@@ -303,17 +315,22 @@ const Transfers: React.FC<TransfersProps> = ({ defaultTab = 'requests' }) => {
         actorUsername: username,
         imageContent,
         imageName,
-        imageMimeType
+        imageMimeType,
+        requestId: currentRequestId,
       });
     setIsSaving(false);
     setMessage(response.message || '');
     if (response.success) {
+      transferRequestIdRef.current = '';
+      toast.success(response.message || 'Tạo yêu cầu luân chuyển thành công!');
       setReason('');
       setSelectedFile(null);
       if (transferType === 'Trả') setToDepartment('');
       else setDeviceType('');
       await loadData();
       setActiveTab('requests');
+    } else {
+      toast.error(response.message || 'Lỗi khi gửi yêu cầu luân chuyển.');
     }
   };
 

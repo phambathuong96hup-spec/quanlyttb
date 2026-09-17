@@ -8,7 +8,9 @@ const SHEETS = {
   workflowOverrides: 'OperationalWorkflows',
   costEntries: 'CostEntries',
   documents: 'Documents',
-  logs: 'ActivityLogs'
+  logs: 'ActivityLogs',
+  pendingSync: 'PendingSync',
+  idempotency: 'IdempotencyKeys'
 };
 
 const LOG_HEADERS = [
@@ -18,6 +20,32 @@ const LOG_HEADERS = [
   'ID Thiết bị',
   'Tên Thiết bị',
   'Chi tiết thay đổi'
+];
+
+const PENDING_SYNC_HEADERS = [
+  'SyncId',
+  'TaskType',
+  'RepairRowId',
+  'DeviceId',
+  'TargetStatus',
+  'ExpectedStatus',
+  'ExpectedUpdatedAt',
+  'CreatedAt',
+  'Status',
+  'LastError',
+  'RetryCount',
+  'UpdatedAt'
+];
+
+const IDEMPOTENCY_HEADERS = [
+  'Key',
+  'Username',
+  'Action',
+  'PayloadHash',
+  'Status',
+  'ResponseJson',
+  'CreatedAt',
+  'UpdatedAt'
 ];
 
 const DEVICE_SPREADSHEET_ID = '1fwwIwXpCqhCZzaitYs2__hzfuTNW7mcGAvKl3y_hqZ0';
@@ -91,7 +119,7 @@ const DOCUMENT_HEADERS = [
 ];
 
 const USER_HEADERS = ['Tên đăng nhập', 'Mã PIN', 'Quyền hạn', 'Họ và Tên', 'Email', 'Khoa/Phòng', 'Trạng thái'];
-const REPAIR_HEADERS = ['Thời gian', 'Mã Máy/Thiết bị', 'Người báo lỗi', 'Email người báo', 'Tên đăng nhập người báo', 'Khoa/Phòng', 'Mô tả lỗi', 'Trạng Thái', 'Người duyệt', 'Ghi chú xử lý'];
+const REPAIR_HEADERS = ['Thời gian', 'Mã Máy/Thiết bị', 'Người báo lỗi', 'Email người báo', 'Tên đăng nhập người báo', 'Khoa/Phòng', 'Mô tả lỗi', 'Trạng Thái', 'Người duyệt', 'Ghi chú xử lý', 'RequestId'];
 const TRANSFER_HEADERS = [
   'TransferId',
   'CreatedAt',
@@ -115,7 +143,8 @@ const TRANSFER_HEADERS = [
   'RejectedBy',
   'RejectedAt',
   'RejectReason',
-  'UpdatedAt'
+  'UpdatedAt',
+  'RequestId'
 ];
 const GSP_HEADERS = ['date', 'shift', 'tempKho', 'tempTuLanh', 'humidity', 'note', 'recorder'];
 const INVENTORY_RUN_HEADERS = [
@@ -174,7 +203,279 @@ function doPost(e) {
   }
 }
 
+function computePayloadHash_(payload) {
+  if (!payload || typeof payload !== 'object') return '';
+  const filtered = {};
+  const ignoredKeys = ['requestId', 'token', 'sessionToken', 'sessionId', '_retryCount'];
+  Object.keys(payload).sort().forEach(function(k) {
+    if (ignoredKeys.indexOf(k) === -1) {
+      filtered[k] = payload[k];
+    }
+  });
+  const raw = JSON.stringify(filtered);
+  if (typeof Utilities !== 'undefined' && Utilities.computeDigest && Utilities.DigestAlgorithm) {
+    const digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, raw, Utilities.Charset.UTF_8);
+    return digest.map(function(b) {
+      const v = (b < 0 ? b + 256 : b).toString(16);
+      return v.length === 1 ? '0' + v : v;
+    }).join('');
+  }
+  let hash = 0;
+  for (let i = 0; i < raw.length; i++) {
+    hash = ((hash << 5) - hash) + raw.charCodeAt(i);
+    hash |= 0;
+  }
+  return 'h' + Math.abs(hash);
+}
+
+function findBusinessRecordByRequestId_(actionName, requestId) {
+  if (!requestId) return null;
+  if (actionName === 'uploadFormTemplate' || actionName === 'submitForm') {
+    const row = getRows_(actionName === 'uploadFormTemplate' ? 'FormTemplates' : 'SubmittedForms')
+      .find(r => String(r.RequestId || '') === requestId);
+    return row ? { success: true, id: row.Id, idempotentReplay: true, message: 'Phiếu hoặc mẫu đã được lưu trước đó.' } : null;
+  }
+  if (actionName === 'reportRepair') {
+    try {
+      if (typeof getRows_ !== 'function') return null;
+      const repairRows = getRows_(SHEETS.repairs);
+      const foundRepair = repairRows.find(function(r) {
+        return String(r.RequestId || r['Mã yêu cầu'] || '').trim() === requestId;
+      });
+      if (foundRepair) {
+        const repairRowId = String(foundRepair['Thời gian'] || '');
+        const deviceId = String(foundRepair['Mã Máy/Thiết bị'] || '').replace('[KHẨN] ', '').trim();
+        const description = String(foundRepair['Mô tả lỗi'] || '');
+
+        let isSyncCompleted = false;
+        let pendingSyncFound = null;
+        try {
+          const pendingSyncRows = getRows_(SHEETS.pendingSync);
+          pendingSyncFound = pendingSyncRows.find(function(ps) {
+            return repairRowId && String(ps.RepairRowId || '').trim() === repairRowId &&
+                   deviceId && String(ps.DeviceId || '').trim() === deviceId;
+          });
+          if (pendingSyncFound && String(pendingSyncFound.Status || '').trim().toUpperCase() === 'COMPLETED') {
+            isSyncCompleted = true;
+          }
+        } catch (psErr) {
+          console.warn('Lỗi khi kiểm tra PendingSync trong đối soát:', psErr);
+        }
+
+        const attachmentMatches = description.match(/\[(?:Ảnh|Video|Tệp) minh chứng \d+ - [^\]]+\]:\s*(\S+)/g) || [];
+        const attachmentCount = attachmentMatches.length;
+
+        const response = {
+          success: true,
+          partialSuccess: !isSyncCompleted,
+          syncStatus: isSyncCompleted ? 'completed' : 'unknown',
+          repairRowId: repairRowId,
+          message: isSyncCompleted
+            ? 'Yêu cầu báo hỏng đã được ghi nhận và đồng bộ trạng thái trước đó (khôi phục từ bản ghi).'
+            : 'Yêu cầu báo hỏng đã được lưu phiếu (' + repairRowId + ') nhưng trạng thái đồng bộ thiết bị chưa thể xác nhận hoàn thành (khôi phục từ bản ghi đối soát).',
+          attachmentCount: attachmentCount,
+          attachmentFailures: [],
+          repair: {
+            rowId: repairRowId,
+            deviceId: String(foundRepair['Mã Máy/Thiết bị'] || ''),
+            userName: String(foundRepair['Người báo lỗi'] || ''),
+            userEmail: String(foundRepair['Email người báo'] || ''),
+            description: description,
+            status: String(foundRepair['Trạng Thái'] || 'Chờ duyệt')
+          },
+          idempotentReplay: true
+        };
+
+        if (!isSyncCompleted) {
+          response.needsManualReview = true;
+        }
+        if (pendingSyncFound && pendingSyncFound.SyncId) {
+          response.syncId = String(pendingSyncFound.SyncId);
+        }
+
+        return response;
+      }
+    } catch (e) {
+      console.error('Lỗi khi đối soát bản ghi sửa chữa:', e);
+    }
+  } else if (actionName === 'createTransfer' || actionName === 'createTransferTypeRequest') {
+    try {
+      if (typeof getRows_ !== 'function') return null;
+      const transferRows = getRows_(SHEETS.transfers);
+      const foundTransfer = transferRows.find(function(r) {
+        return String(r.RequestId || '').trim() === requestId;
+      });
+      if (foundTransfer) {
+        return {
+          success: true,
+          message: 'Yêu cầu luân chuyển đã được tạo thành công trước đó (khôi phục từ bản ghi).',
+          transferId: String(foundTransfer.TransferId || ''),
+          idempotentReplay: true
+        };
+      }
+    } catch (e) {
+      console.error('Lỗi khi đối soát bản ghi luân chuyển:', e);
+    }
+  }
+  return null;
+}
+
+function handleIdempotentAction_(actionName, payload, actor, actionCallback) {
+  const requestId = String(payload && (payload.requestId || payload.request_id) || '').trim();
+  if (!requestId) {
+    return actionCallback();
+  }
+
+  ensureSheet_(SHEETS.idempotency, IDEMPOTENCY_HEADERS);
+  const username = userUsername_(actor);
+  const payloadHash = computePayloadHash_(payload);
+
+  // 1. Kiểm tra idempotency dưới khóa ngắn (5000ms)
+  const checkResult = withDeviceMutationLock_(function() {
+    const rows = getRowsWithRowIndex_(SHEETS.idempotency);
+    const existing = rows.find(function(r) {
+      return String(r.data.Key || '').trim() === requestId;
+    });
+
+    if (existing) {
+      const recUsername = String(existing.data.Username || '').trim();
+      if (!recUsername || normalize_(recUsername) !== normalize_(username)) {
+        return { error: { success: false, message: 'Yêu cầu không hợp lệ: RequestId thuộc về người dùng khác hoặc thiếu thông tin xác thực.' } };
+      }
+      const recAction = String(existing.data.Action || '').trim();
+      if (!recAction || recAction !== actionName) {
+        return { error: { success: false, message: 'Yêu cầu không hợp lệ: RequestId đã dùng cho hành động khác hoặc thiếu thông tin hành động.' } };
+      }
+      const recHash = String(existing.data.PayloadHash || '').trim();
+      if (!recHash || recHash !== payloadHash) {
+        return { error: { success: false, message: 'Dữ liệu yêu cầu không khớp với RequestId đã gửi trước đó.' } };
+      }
+
+      const status = String(existing.data.Status || '').trim().toUpperCase();
+      if (status === 'COMPLETED') {
+        const rawJson = String(existing.data.ResponseJson || '').trim();
+        if (!rawJson) {
+          return { error: { success: false, message: 'Biên nhận giao dịch trước đó không hợp lệ (dữ liệu rỗng). Vui lòng đối soát lại.', code: 'CORRUPTED_RECEIPT' } };
+        }
+        let resp = null;
+        try {
+          resp = JSON.parse(rawJson);
+        } catch (parseErr) {
+          return { error: { success: false, message: 'Không thể đọc biên nhận giao dịch trước đó (dữ liệu biên nhận bị hỏng). Vui lòng đối soát lại.', code: 'CORRUPTED_RECEIPT' } };
+        }
+        if (!resp || typeof resp !== 'object' || Array.isArray(resp) || typeof resp.success !== 'boolean' || Object.keys(resp).length === 0) {
+          return { error: { success: false, message: 'Biên nhận giao dịch trước đó không hợp lệ (cấu trúc receipt không đúng). Vui lòng đối soát lại.', code: 'CORRUPTED_RECEIPT' } };
+        }
+        resp.idempotentReplay = true;
+        return { replay: resp };
+      }
+
+      // Trạng thái là PROCESSING hoặc UNKNOWN: không tự động tái thực thi
+      return { checkRecovery: true };
+    }
+
+    appendObject_(SHEETS.idempotency, {
+      Key: requestId,
+      Username: username,
+      Action: actionName,
+      PayloadHash: payloadHash,
+      Status: 'PROCESSING',
+      ResponseJson: '',
+      CreatedAt: new Date(),
+      UpdatedAt: new Date()
+    });
+    return { proceed: true };
+  });
+
+  if (checkResult && checkResult.error) {
+    return checkResult.error;
+  }
+  if (checkResult && checkResult.replay) {
+    return checkResult.replay;
+  }
+  if (checkResult && checkResult.checkRecovery) {
+    // Thử đối soát tìm bản ghi nghiệp vụ đã lưu thành công trước đó
+    const recovered = findBusinessRecordByRequestId_(actionName, requestId);
+    if (recovered) {
+      withDeviceMutationLock_(function() {
+        try {
+          const rows = getRowsWithRowIndex_(SHEETS.idempotency);
+          const target = rows.find(function(r) {
+            return String(r.data.Key || '').trim() === requestId;
+          });
+          if (target) {
+            let finalStatus = 'COMPLETED';
+            if (recovered.needsManualReview || recovered.resultUnknown) {
+              finalStatus = 'UNKNOWN';
+            }
+            updateRowByObject_(SHEETS.idempotency, target.rowIndex, {
+              Status: finalStatus,
+              ResponseJson: JSON.stringify(recovered),
+              UpdatedAt: new Date()
+            });
+          }
+        } catch (saveErr) {
+          console.error('Không thể cập nhật trạng thái sau đối soát:', saveErr);
+        }
+      });
+      return recovered;
+    }
+
+    // Không tìm thấy bản ghi nghiệp vụ và trạng thái là PROCESSING/UNKNOWN:
+    // Tuyệt đối không tái thực thi khi chưa chứng minh chưa có side effect
+    return {
+      success: false,
+      message: 'Yêu cầu đang được xử lý hoặc ở trạng thái chưa xác định (RequestId: ' + requestId + '). Vui lòng kiểm tra lại danh sách hoặc liên hệ quản trị viên trước khi gửi lại.',
+      code: 'UNCERTAIN_STATE'
+    };
+  }
+
+  if (!checkResult || !checkResult.proceed) {
+    return checkResult || { success: false, message: 'Không thể xác thực khóa giao dịch. Vui lòng thử lại.' };
+  }
+
+  // 2. KHÓA ĐÃ ĐƯỢC GIẢI PHÓNG TRƯỚC KHI CHẠY CALLBACK -> Không gây nested deadlock
+  let result = null;
+  let executionThrew = false;
+  try {
+    result = actionCallback();
+  } catch (err) {
+    executionThrew = true;
+    result = {
+      success: false,
+      message: 'Lỗi thực thi: ' + (err.message || String(err)),
+      code: 'EXECUTION_ERROR'
+    };
+  }
+
+  // 3. Tái lập khóa ngắn để cập nhật kết quả giao dịch
+  withDeviceMutationLock_(function() {
+    try {
+      const rows = getRowsWithRowIndex_(SHEETS.idempotency);
+      const target = rows.find(function(r) {
+        return String(r.data.Key || '').trim() === requestId;
+      });
+      if (target) {
+        let finalStatus = 'COMPLETED';
+        if (executionThrew || (result && (result.needsManualReview || result.resultUnknown))) {
+          finalStatus = 'UNKNOWN';
+        }
+        updateRowByObject_(SHEETS.idempotency, target.rowIndex, {
+          Status: finalStatus,
+          ResponseJson: JSON.stringify(result || {}),
+          UpdatedAt: new Date()
+        });
+      }
+    } catch (saveErr) {
+      console.error('Không thể cập nhật trạng thái idempotency receipt:', saveErr);
+    }
+  });
+
+  return result;
+}
+
 function route_(action, payload) {
+  if (['listFormTemplates','listSubmittedForms','downloadFormFile','uploadFormTemplate','submitForm','removeFormTemplate'].includes(action)) return formLibraryRoute_(action, payload || {});
   if (action === 'login') return login_(payload);
   setupSheets();
   let actor;
@@ -225,6 +526,10 @@ function route_(action, payload) {
       actor = requireAdmin_(payload);
       if (!actor) return authError_('Chỉ Admin được import snapshot thiết bị.');
       return importSnapshotDevices_(payload, actor);
+    case 'reconcilePendingSyncs':
+      actor = requireAdmin_(payload);
+      if (!actor) return authError_('Chỉ Admin được thực hiện đối soát đồng bộ.');
+      return reconcilePendingSyncs_(actor);
     case 'reportRepair':
       actor = requireAuthenticated_(payload);
       if (!actor) return authError_();
@@ -232,7 +537,9 @@ function route_(action, payload) {
       payload.userEmail = userEmail_(actor);
       payload.actorUsername = userUsername_(actor);
       payload.actorDepartment = userDepartment_(actor);
-      return reportRepair_(payload, actor);
+      return handleIdempotentAction_('reportRepair', payload, actor, function() {
+        return reportRepair_(payload, actor);
+      });
     case 'approveRepair':
       actor = requireAuthenticated_(payload);
       if (!actor) return authError_();
@@ -248,21 +555,29 @@ function route_(action, payload) {
     case 'addDocument':
       actor = requireAuthenticated_(payload);
       if (!actor) return authError_();
-      return addDocument_(payload, actor);
+      return handleIdempotentAction_('addDocument', payload, actor, function() {
+        return addDocument_(payload, actor);
+      });
     case 'renewDocument':
       actor = requireAuthenticated_(payload);
       if (!actor) return authError_();
-      return renewDocument_(payload, actor);
+      return handleIdempotentAction_('renewDocument', payload, actor, function() {
+        return renewDocument_(payload, actor);
+      });
     case 'createTransfer':
       actor = requireAuthenticated_(payload);
       if (!actor) return authError_();
       payload.actorUsername = userUsername_(actor);
-      return createTransfer_(payload);
+      return handleIdempotentAction_('createTransfer', payload, actor, function() {
+        return createTransfer_(payload);
+      });
     case 'createTransferTypeRequest':
       actor = requireAuthenticated_(payload);
       if (!actor) return authError_();
       payload.actorUsername = userUsername_(actor);
-      return createTransferTypeRequest_(payload);
+      return handleIdempotentAction_('createTransferTypeRequest', payload, actor, function() {
+        return createTransferTypeRequest_(payload);
+      });
     case 'assignTransferDevice':
       actor = requireAdmin_(payload);
       if (!actor) return authError_('Chỉ Admin được chọn máy cụ thể cho phiếu luân chuyển.');
@@ -287,7 +602,9 @@ function route_(action, payload) {
       actor = requireAuthenticated_(payload);
       if (!actor) return authError_();
       payload.actorUsername = userUsername_(actor);
-      return createTransfer_(payload);
+      return handleIdempotentAction_('createTransfer', payload, actor, function() {
+        return createTransfer_(payload);
+      });
     case 'addGSP':
       actor = requireAuthenticated_(payload);
       if (!actor) return authError_();
@@ -633,6 +950,8 @@ function setupSheets() {
   ensureSheet_(SHEETS.costEntries, COST_ENTRY_HEADERS);
   ensureSheet_(SHEETS.documents, DOCUMENT_HEADERS);
   ensureSheet_(SHEETS.logs, LOG_HEADERS);
+  ensureSheet_(SHEETS.pendingSync, PENDING_SYNC_HEADERS);
+  ensureSheet_(SHEETS.idempotency, IDEMPOTENCY_HEADERS);
 }
 
 function logActivity_(action, targetId, targetName, details, actor) {
@@ -652,16 +971,120 @@ function logActivity_(action, targetId, targetName, details, actor) {
 }
 
 
+function isLeapYear_(year) {
+  return (year % 4 === 0 && year % 100 !== 0) || (year % 400 === 0);
+}
+
+function getDaysInMonth_(year, month) {
+  if (month < 1 || month > 12) return 0;
+  if (month === 2) return isLeapYear_(year) ? 29 : 28;
+  if (month === 4 || month === 6 || month === 9 || month === 11) return 30;
+  return 31;
+}
+
+function isValidDayInMonth_(year, month, day) {
+  const maxDays = getDaysInMonth_(year, month);
+  return maxDays > 0 && day >= 1 && day <= maxDays;
+}
+
 function parseDate_(dateStr) {
-  if (!dateStr) return new Date(NaN);
-  const parts = String(dateStr).split('/');
-  if (parts.length === 3) {
-    const d = parseInt(parts[0], 10);
-    const m = parseInt(parts[1], 10) - 1;
-    const y = parseInt(parts[2], 10);
-    return new Date(y, m, d);
+  if (!dateStr && dateStr !== 0) return new Date(NaN);
+  if (dateStr instanceof Date) {
+    return isNaN(dateStr.getTime()) ? new Date(NaN) : dateStr;
   }
-  return new Date(dateStr);
+  if (typeof dateStr === 'number') {
+    const dNum = new Date(dateStr);
+    return isNaN(dNum.getTime()) ? new Date(NaN) : dNum;
+  }
+  const str = String(dateStr).trim();
+  if (!str || str.toLowerCase() === 'na' || str.toLowerCase() === 'n/a' || str.toLowerCase() === 'invalid date') {
+    return new Date(NaN);
+  }
+
+  // 1. Định dạng Việt Nam toàn chuỗi: dd/MM/yyyy [HH:mm[:ss]]
+  const vnMatch = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?$/);
+  if (vnMatch) {
+    const d = parseInt(vnMatch[1], 10);
+    const m = parseInt(vnMatch[2], 10);
+    const y = parseInt(vnMatch[3], 10);
+    const hr = parseInt(vnMatch[4] || '0', 10);
+    const min = parseInt(vnMatch[5] || '0', 10);
+    const sec = parseInt(vnMatch[6] || '0', 10);
+
+    if (y < 1000 || y > 9999 || !isValidDayInMonth_(y, m, d) || hr < 0 || hr > 23 || min < 0 || min > 59 || sec < 0 || sec > 59) {
+      return new Date(NaN);
+    }
+    const dt = new Date(y, m - 1, d, hr, min, sec);
+    if (dt.getFullYear() !== y || dt.getMonth() !== m - 1 || dt.getDate() !== d || dt.getHours() !== hr || dt.getMinutes() !== min || dt.getSeconds() !== sec) {
+      return new Date(NaN);
+    }
+    return dt;
+  }
+
+  // 2. Định dạng ISO chỉ ngày (Date-only): YYYY-MM-DD (khớp toàn chuỗi)
+  const isoDateOnlyMatch = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (isoDateOnlyMatch) {
+    const y = parseInt(isoDateOnlyMatch[1], 10);
+    const m = parseInt(isoDateOnlyMatch[2], 10);
+    const d = parseInt(isoDateOnlyMatch[3], 10);
+    if (y < 1000 || y > 9999 || !isValidDayInMonth_(y, m, d)) {
+      return new Date(NaN);
+    }
+    const dt = new Date(y, m - 1, d, 0, 0, 0, 0);
+    if (dt.getFullYear() !== y || dt.getMonth() !== m - 1 || dt.getDate() !== d) {
+      return new Date(NaN);
+    }
+    return dt;
+  }
+
+  // 3. Định dạng ISO có giờ (ISO 8601 with time and optional offset/Z) (khớp toàn chuỗi)
+  const isoDateTimeMatch = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})[T\s](\d{1,2}):(\d{1,2})(?::(\d{1,2})(?:\.(\d{1,3}))?)?(?:(Z)|([+-]\d{1,2})(?::?(\d{2}))?)?$/i);
+  if (isoDateTimeMatch) {
+    const y = parseInt(isoDateTimeMatch[1], 10);
+    const m = parseInt(isoDateTimeMatch[2], 10);
+    const d = parseInt(isoDateTimeMatch[3], 10);
+    const hr = parseInt(isoDateTimeMatch[4], 10);
+    const min = parseInt(isoDateTimeMatch[5], 10);
+    const sec = parseInt(isoDateTimeMatch[6] || '0', 10);
+
+    if (y < 1000 || y > 9999 || !isValidDayInMonth_(y, m, d) || hr < 0 || hr > 23 || min < 0 || min > 59 || sec < 0 || sec > 59) {
+      return new Date(NaN);
+    }
+
+    const hasOffset = Boolean(isoDateTimeMatch[8] || isoDateTimeMatch[9]);
+    if (hasOffset) {
+      if (isoDateTimeMatch[9]) {
+        const offHr = Math.abs(parseInt(isoDateTimeMatch[9], 10));
+        const offMin = parseInt(isoDateTimeMatch[10] || '0', 10);
+        if (offHr > 14 || offMin < 0 || offMin > 59) {
+          return new Date(NaN);
+        }
+      }
+      const dt = new Date(str);
+      return isNaN(dt.getTime()) ? new Date(NaN) : dt;
+    } else {
+      const ms = parseInt((isoDateTimeMatch[7] || '0').padEnd(3, '0'), 10);
+      const dt = new Date(y, m - 1, d, hr, min, sec, ms);
+      if (dt.getFullYear() !== y || dt.getMonth() !== m - 1 || dt.getDate() !== d || dt.getHours() !== hr || dt.getMinutes() !== min || dt.getSeconds() !== sec) {
+        return new Date(NaN);
+      }
+      return dt;
+    }
+  }
+
+  // 4. Hỗ trợ chuỗi Date tiêu chuẩn trả về từ Google Sheets / JS Date.toString()
+  if (/^[A-Za-z]{3}\s+[A-Za-z]{3}\s+\d{1,2}\s+\d{4}/.test(str)) {
+    const dt = new Date(str);
+    if (!isNaN(dt.getTime())) return dt;
+  }
+
+  return new Date(NaN);
+}
+
+function isValidDateString_(dateStr) {
+  if (!dateStr) return false;
+  const dt = parseDate_(dateStr);
+  return !isNaN(dt.getTime());
 }
 
 function statusDaysUntil_(dateStr, today) {
@@ -1206,7 +1629,8 @@ function createTransfer_(payload) {
     RequestedByEmail: userEmail_(actor),
     RequestedNote: reqNote,
     RequestedAt: now,
-    UpdatedAt: now
+    UpdatedAt: now,
+    RequestId: payload.requestId || payload.request_id || ''
   });
 
   sendTransferMail_({
@@ -1265,7 +1689,8 @@ function createTransferTypeRequest_(payload) {
     RequestedByEmail: userEmail_(actor),
     RequestedNote: reqNote,
     RequestedAt: now,
-    UpdatedAt: now
+    UpdatedAt: now,
+    RequestId: payload.requestId || payload.request_id || ''
   });
 
   logActivity_(
@@ -1610,6 +2035,137 @@ function discardEvidenceFiles_(files) {
   });
 }
 
+function getDriveSharingPolicy_() {
+  try {
+    if (typeof PropertiesService === 'undefined' || !PropertiesService.getScriptProperties) {
+      return 'PRIVATE';
+    }
+    const properties = PropertiesService.getScriptProperties();
+    const policy = properties ? properties.getProperty('DRIVE_SHARING_POLICY') : null;
+    return policy ? String(policy).trim().toUpperCase() : 'PRIVATE';
+  } catch (err) {
+    console.warn('Không thể đọc cấu hình DRIVE_SHARING_POLICY, dùng mặc định PRIVATE:', err);
+    return 'PRIVATE';
+  }
+}
+
+function assertFolderPrivate_(folder) {
+  if (!folder) {
+    throw new Error('Không xác định được thư mục lưu trữ trên Google Drive.');
+  }
+  if (typeof folder.getSharingAccess !== 'function') {
+    throw new Error('Từ chối upload: Không thể kiểm tra quyền chia sẻ của thư mục (thiếu phương thức getSharingAccess; Shared Drive không được hỗ trợ để lưu trữ bảo mật).');
+  }
+
+  let access;
+  try {
+    access = folder.getSharingAccess();
+  } catch (err) {
+    throw new Error('Từ chối upload: Lỗi khi đọc quyền chia sẻ của thư mục: ' + (err.message || String(err)));
+  }
+
+  if (typeof DriveApp === 'undefined' || !DriveApp.Access) {
+    throw new Error('Từ chối upload: Đối tượng DriveApp hoặc DriveApp.Access không tồn tại.');
+  }
+
+  if (access === DriveApp.Access.ANYONE_WITH_LINK || access === DriveApp.Access.ANYONE) {
+    throw new Error('Từ chối upload: Thư mục lưu trữ đang mở chia sẻ công khai (' + access + '). Hãy cấu hình thư mục về Restricted (Private).');
+  }
+
+  const policy = getDriveSharingPolicy_();
+  if (policy === 'DOMAIN_WITH_LINK' && DriveApp.Access.DOMAIN_WITH_LINK) {
+    if (access !== DriveApp.Access.PRIVATE && access !== DriveApp.Access.DOMAIN && access !== DriveApp.Access.DOMAIN_WITH_LINK) {
+      throw new Error('Từ chối upload: Thư mục không đáp ứng chính sách chia sẻ tổ chức (quyền hiện tại: ' + access + ').');
+    }
+  } else {
+    if (access !== DriveApp.Access.PRIVATE) {
+      throw new Error('Từ chối upload: Thư mục lưu trữ không có quyền PRIVATE (' + access + ').');
+    }
+  }
+
+  // Duyệt toàn bộ cây tổ tiên; không bỏ qua cấp không đọc được quyền.
+  const pending = [folder];
+  const visited = {};
+  let checked = 0;
+  while (pending.length) {
+    const current = pending.pop();
+    if (++checked > 100) throw new Error('Từ chối upload: Cây thư mục vượt giới hạn kiểm tra.');
+    const id = current && typeof current.getId === 'function' ? current.getId() : '';
+    if (id && visited[id]) continue;
+    if (id) visited[id] = true;
+    if (!current || typeof current.getSharingAccess !== 'function' || typeof current.getParents !== 'function') {
+      throw new Error('Từ chối upload: Không thể xác minh quyền hoặc tổ tiên của thư mục.');
+    }
+    const currentAccess = current.getSharingAccess();
+    if (currentAccess === DriveApp.Access.ANYONE_WITH_LINK || currentAccess === DriveApp.Access.ANYONE) {
+      throw new Error('Từ chối upload: Thư mục cha/tổ tiên đang mở chia sẻ công khai.');
+    }
+    const allowed = currentAccess === DriveApp.Access.PRIVATE ||
+      (policy === 'DOMAIN_WITH_LINK' && (currentAccess === DriveApp.Access.DOMAIN || currentAccess === DriveApp.Access.DOMAIN_WITH_LINK));
+    if (!allowed) throw new Error('Từ chối upload: Quyền thư mục tổ tiên không đáp ứng chính sách.');
+    const parents = current.getParents();
+    if (!parents || typeof parents.hasNext !== 'function') {
+      throw new Error('Từ chối upload: Không thể đọc danh sách thư mục cha.');
+    }
+    while (parents.hasNext()) {
+      if (typeof parents.next !== 'function' || pending.length > 100) {
+        throw new Error('Từ chối upload: Danh sách thư mục cha không hợp lệ.');
+      }
+      pending.push(parents.next());
+    }
+  }
+}
+
+function applyFileAccessPolicy_(file, folder) {
+  if (!file) {
+    throw new Error('Tệp không hợp lệ để áp dụng chính sách truy cập.');
+  }
+  if (typeof file.setSharing !== 'function' || typeof file.getSharingAccess !== 'function') {
+    throw new Error('Tệp không hỗ trợ thiết lập hoặc đọc quyền chia sẻ (setSharing / getSharingAccess).');
+  }
+
+  // Luôn kiểm tra thư mục cha đảm bảo không mở công khai (fail-closed)
+  assertFolderPrivate_(folder);
+
+  const policy = getDriveSharingPolicy_();
+  if (typeof DriveApp === 'undefined' || !DriveApp.Access || !DriveApp.Permission) {
+    throw new Error('Không tìm thấy đối tượng DriveApp hợp lệ trong môi trường thực thi.');
+  }
+
+  try {
+    if (policy === 'DOMAIN_WITH_LINK' && DriveApp.Access.DOMAIN_WITH_LINK) {
+      file.setSharing(DriveApp.Access.DOMAIN_WITH_LINK, DriveApp.Permission.VIEW);
+    } else {
+      // Mặc định: PRIVATE/VIEW theo tài liệu Google Apps Script; không nuốt lỗi setSharing
+      file.setSharing(DriveApp.Access.PRIVATE, DriveApp.Permission.VIEW);
+    }
+  } catch (setErr) {
+    throw new Error('Lỗi khi thiết lập quyền chia sẻ cho tệp: ' + (setErr.message || String(setErr)));
+  }
+
+  // Kiểm tra lại quyền của tệp sau khi thiết lập (fail-closed)
+  let appliedAccess;
+  try {
+    appliedAccess = file.getSharingAccess();
+  } catch (readErr) {
+    throw new Error('Không thể đọc quyền của tệp sau khi áp dụng chính sách: ' + (readErr.message || String(readErr)));
+  }
+
+  if (appliedAccess === DriveApp.Access.ANYONE_WITH_LINK || appliedAccess === DriveApp.Access.ANYONE) {
+    throw new Error('Từ chối lưu tệp: Tệp vẫn mang quyền chia sẻ công khai sau khi áp dụng chính sách (' + appliedAccess + ').');
+  }
+
+  if (policy === 'DOMAIN_WITH_LINK' && DriveApp.Access.DOMAIN_WITH_LINK) {
+    if (appliedAccess !== DriveApp.Access.PRIVATE && appliedAccess !== DriveApp.Access.DOMAIN && appliedAccess !== DriveApp.Access.DOMAIN_WITH_LINK) {
+      throw new Error('Từ chối lưu tệp: Tệp không mang quyền tổ chức hợp lệ (' + appliedAccess + ').');
+    }
+  } else {
+    if (appliedAccess !== DriveApp.Access.PRIVATE) {
+      throw new Error('Từ chối lưu tệp: Tệp không mang quyền PRIVATE sau khi thiết lập (' + appliedAccess + ').');
+    }
+  }
+}
+
 function uploadEvidenceFilesToDrive_(payload, folderName) {
   const incoming = repairAttachmentsFromPayload_(payload);
   const result = { files: [], failures: [] };
@@ -1624,6 +2180,16 @@ function uploadEvidenceFilesToDrive_(payload, folderName) {
   const attachments = incoming.slice(0, MAX_REPAIR_ATTACHMENTS);
   let totalDecodedBytes = 0;
   let folder = null;
+  try {
+    folder = evidenceFolder_(folderName);
+    assertFolderPrivate_(folder);
+  } catch (folderErr) {
+    console.error('Lỗi quyền thư mục minh chứng:', folderErr);
+    attachments.forEach(function(att) {
+      result.failures.push(String(att.name || 'Tệp không tên'));
+    });
+    return result;
+  }
 
   attachments.forEach(function(attachment) {
     const fileName = String(attachment.name || '').trim();
@@ -1660,7 +2226,7 @@ function uploadEvidenceFilesToDrive_(payload, folderName) {
       const mimeType = evidenceMimeType_(attachment);
       const blob = Utilities.newBlob(decoded, mimeType, fileName);
       createdFile = folder.createFile(blob);
-      createdFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+      applyFileAccessPolicy_(createdFile, folder);
       result.files.push({
         url: createdFile.getUrl(),
         fileId: createdFile.getId(),
@@ -1755,6 +2321,7 @@ function reportRepair_(payload, actor) {
   });
 
   let repairRowId = '';
+  const requestId = String(payload.requestId || payload.request_id || '').trim();
   try {
     repairRowId = appendRepairAndGetRowId_({
       'Thời gian': submittedAt,
@@ -1764,31 +2331,119 @@ function reportRepair_(payload, actor) {
       'Tên đăng nhập người báo': payload.actorUsername || '',
       'Khoa/Phòng': payload.actorDepartment || '',
       'Mô tả lỗi': description,
-      'Trạng Thái': 'Chờ duyệt'
+      'Trạng Thái': 'Chờ duyệt',
+      'RequestId': requestId
     });
   } catch (err) {
-    console.error('Không thể ghi phiếu sửa chữa:', err);
-    discardEvidenceFiles_(evidenceUpload.files);
+    console.error('Không thể ghi phiếu sửa chữa hoặc đọc mã dòng:', err);
+    // Tuyệt đối không dọn tệp minh chứng vì appendRow có thể đã ghi thành công trước khi phát sinh lỗi
     return {
       success: false,
-      message: 'Không thể ghi phiếu sửa chữa. Tệp minh chứng đã được dọn; vui lòng thử lại.'
+      needsManualReview: true,
+      resultUnknown: true,
+      syncStatus: 'unknown',
+      requestId: requestId,
+      message: 'Không thể xác nhận trạng thái lưu phiếu sửa chữa. Tệp minh chứng được bảo toàn; vui lòng liên hệ quản trị viên để đối soát thủ công.',
+      code: 'UNCERTAIN_WRITE'
     };
   }
 
+  // Phiếu sửa chữa đã ghi thành công -> tuyệt đối không dọn tệp minh chứng sau bước này
   let device = null;
-  try {
-    const deviceRowIndex = findDeviceRow_(cleanDeviceId);
-    device = findDeviceById_(cleanDeviceId);
-    if (deviceRowIndex >= 2) {
-      updateRowByObject_(SHEETS.devices, deviceRowIndex, {
-        'Hiện trạng thực tế': reportRepairDeviceStatus_(device),
-        'Ngày cập nhật': new Date()
-      });
-      syncDeviceStatusForDevice_(cleanDeviceId);
+  let deviceSyncSucceeded = false;
+  let syncErrorMessage = '';
+  let pendingSyncSaved = false;
+  const pendingSyncId = 'SYNC-' + (typeof Utilities !== 'undefined' && Utilities.getUuid ? Utilities.getUuid() : (Date.now() + '-' + Math.random().toString(36).slice(2, 8)));
+
+  withDeviceMutationLock_(function() {
+    try {
+      device = findDeviceById_(cleanDeviceId);
+    } catch (devFindErr) {
+      console.warn('Không thể tìm thông tin thiết bị:', devFindErr);
     }
-  } catch (err) {
-    console.error('Đã ghi phiếu nhưng chưa đồng bộ được trạng thái thiết bị:', err);
-  }
+
+    const targetStatus = reportRepairDeviceStatus_(device);
+    const expectedStatus = device ? String(device['Hiện trạng thực tế'] || device.status || '').trim() : '';
+    const expectedUpdatedAt = device ? (device['Ngày cập nhật'] || '') : '';
+
+    // Ghi nhận tác vụ PendingSync vào hàng đợi TRƯỚC KHI cập nhật trạng thái máy
+    try {
+      ensureSheet_(SHEETS.pendingSync, PENDING_SYNC_HEADERS);
+      appendObject_(SHEETS.pendingSync, {
+        SyncId: pendingSyncId,
+        TaskType: 'reportRepairDeviceSync',
+        RepairRowId: String(repairRowId || ''),
+        DeviceId: cleanDeviceId,
+        TargetStatus: targetStatus,
+        ExpectedStatus: expectedStatus,
+        ExpectedUpdatedAt: expectedUpdatedAt,
+        CreatedAt: submittedAt,
+        Status: 'PENDING',
+        LastError: '',
+        RetryCount: 0,
+        UpdatedAt: submittedAt
+      });
+      pendingSyncSaved = true;
+    } catch (saveSyncErr) {
+      console.error('Không thể lưu tác vụ PendingSync trước khi cập nhật máy:', saveSyncErr);
+    }
+
+    try {
+      const deviceRowIndex = findDeviceRow_(cleanDeviceId);
+      if (deviceRowIndex >= 2) {
+        updateRowByObject_(SHEETS.devices, deviceRowIndex, {
+          'Hiện trạng thực tế': targetStatus,
+          'Ngày cập nhật': new Date()
+        });
+        syncDeviceStatusForDevice_(cleanDeviceId);
+        deviceSyncSucceeded = true;
+      } else {
+        syncErrorMessage = 'Không tìm thấy dòng thiết bị để cập nhật: ' + cleanDeviceId;
+      }
+    } catch (err) {
+      syncErrorMessage = err.message || String(err);
+      console.error('Đã ghi phiếu nhưng chưa đồng bộ được trạng thái thiết bị:', err);
+    }
+
+    // Cập nhật trạng thái PendingSync tương ứng với kết quả cập nhật máy
+    if (deviceSyncSucceeded) {
+      if (pendingSyncSaved) {
+        try {
+          const syncRows = getRowsWithRowIndex_(SHEETS.pendingSync);
+          const savedSync = syncRows.find(function(r) {
+            return String(r.data.SyncId || '').trim() === pendingSyncId;
+          });
+          if (savedSync) {
+            updateRowByObject_(SHEETS.pendingSync, savedSync.rowIndex, {
+              Status: 'COMPLETED',
+              LastError: '',
+              UpdatedAt: new Date()
+            });
+          }
+        } catch (updateSyncErr) {
+          console.warn('Lỗi cập nhật PendingSync COMPLETED:', updateSyncErr);
+        }
+      }
+    } else {
+      if (pendingSyncSaved) {
+        try {
+          const syncRows = getRowsWithRowIndex_(SHEETS.pendingSync);
+          const savedSync = syncRows.find(function(r) {
+            return String(r.data.SyncId || '').trim() === pendingSyncId;
+          });
+          if (savedSync) {
+            updateRowByObject_(SHEETS.pendingSync, savedSync.rowIndex, {
+              LastError: syncErrorMessage,
+              RetryCount: 1,
+              UpdatedAt: new Date()
+            });
+          }
+        } catch (updateSyncErr) {
+          console.warn('Lỗi cập nhật PendingSync retry count:', updateSyncErr);
+        }
+      }
+    }
+  });
 
   logActivity_(
     'Báo hỏng',
@@ -1822,12 +2477,37 @@ function reportRepair_(payload, actor) {
     }
   } catch (err) { console.error('reportRepair_ email failed', err); }
 
+  let responseMessage = '';
+  let responseSyncStatus = 'completed';
+  let needsManualReview = false;
+
+  if (deviceSyncSucceeded) {
+    responseMessage = 'Đã ghi nhận báo hỏng và đồng bộ trạng thái thiết bị.';
+    responseSyncStatus = 'completed';
+  } else if (pendingSyncSaved) {
+    responseMessage = 'Đã ghi nhận phiếu sửa chữa (' + repairRowId + ') nhưng chưa đồng bộ trạng thái thiết bị; yêu cầu đã được lưu để tự động đối soát.';
+    responseSyncStatus = 'pending';
+  } else {
+    responseMessage = 'Đã ghi nhận phiếu sửa chữa (' + repairRowId + ') nhưng đồng bộ trạng thái thiết bị thất bại và không thể lưu hàng đợi đối soát tự động. Vui lòng liên hệ quản trị viên để đối soát thủ công.';
+    responseSyncStatus = 'unknown';
+    needsManualReview = true;
+  }
+
   const response = {
     success: true,
-    message: 'Đã ghi nhận báo hỏng.',
+    partialSuccess: !deviceSyncSucceeded,
+    syncStatus: responseSyncStatus,
+    repairRowId: String(repairRowId || ''),
+    message: responseMessage,
     attachmentCount: evidenceUpload.files.length,
     attachmentFailures: evidenceUpload.failures
   };
+  if (needsManualReview) {
+    response.needsManualReview = true;
+  }
+  if (pendingSyncSaved && pendingSyncId) {
+    response.syncId = pendingSyncId;
+  }
   if (repairRowId) {
     response.repair = {
       rowId: String(repairRowId),
@@ -1839,6 +2519,130 @@ function reportRepair_(payload, actor) {
     };
   }
   return response;
+}
+
+function reconcilePendingSyncs_(actor) {
+  ensureSheet_(SHEETS.pendingSync, PENDING_SYNC_HEADERS);
+  const rows = getRowsWithRowIndex_(SHEETS.pendingSync);
+  const pendingItems = rows.filter(function(r) {
+    return String(r.data.Status || '').trim() === 'PENDING';
+  });
+  let processed = 0;
+  let succeeded = 0;
+  let skipped = 0;
+
+  pendingItems.forEach(function(item) {
+    processed += 1;
+    withDeviceMutationLock_(function() {
+      const currentSyncRows = getRowsWithRowIndex_(SHEETS.pendingSync);
+      const currentItem = currentSyncRows.find(function(r) {
+        return String(r.data.SyncId || '').trim() === String(item.data.SyncId || '').trim();
+      });
+      if (!currentItem || String(currentItem.data.Status || '').trim() !== 'PENDING') {
+        return;
+      }
+
+      const deviceId = currentItem.data.DeviceId;
+      const targetStatus = currentItem.data.TargetStatus;
+      const expectedStatus = String(currentItem.data.ExpectedStatus || '').trim();
+      const expectedUpdatedAt = parseDate_(currentItem.data.ExpectedUpdatedAt);
+      const createdAt = parseDate_(currentItem.data.CreatedAt);
+
+      const deviceRowIndex = findDeviceRow_(deviceId);
+      const device = findDeviceById_(deviceId);
+
+      if (!device || deviceRowIndex < 2) {
+        updateRowByObject_(SHEETS.pendingSync, currentItem.rowIndex, {
+          LastError: 'Thiết bị không tồn tại: ' + deviceId,
+          RetryCount: (parseInt(currentItem.data.RetryCount || '0', 10) + 1),
+          UpdatedAt: new Date()
+        });
+        return;
+      }
+
+      const currentStatus = String(device['Hiện trạng thực tế'] || device.status || '').trim();
+      const currentUpdatedAt = parseDate_(device['Ngày cập nhật'] || '');
+
+      // 1. Nếu trạng thái vật lý đã đúng targetStatus:
+      // Vẫn cần chạy lại syncDeviceStatusForDevice_ để đảm bảo trạng thái tổng hợp đồng bộ.
+      // Nếu sync thất bại, GIỮ NGUYÊN PENDING, lưu LastError và tăng RetryCount; KHÔNG tính là succeeded.
+      if (normalize_(currentStatus) === normalize_(targetStatus)) {
+        try {
+          syncDeviceStatusForDevice_(deviceId);
+          updateRowByObject_(SHEETS.pendingSync, currentItem.rowIndex, {
+            Status: 'COMPLETED',
+            LastError: '',
+            UpdatedAt: new Date()
+          });
+          succeeded += 1;
+        } catch (syncErr) {
+          console.warn('Lỗi syncDeviceStatusForDevice_ khi trạng thái đã trùng target:', syncErr);
+          updateRowByObject_(SHEETS.pendingSync, currentItem.rowIndex, {
+            LastError: syncErr.message || String(syncErr),
+            RetryCount: (parseInt(currentItem.data.RetryCount || '0', 10) + 1),
+            UpdatedAt: new Date()
+          });
+        }
+        return;
+      }
+
+      // 2. Kiểm tra tiến triển hoặc cập nhật mới hơn:
+      // Mốc thời gian đối chiếu (baseline): ưu tiên ExpectedUpdatedAt đã ghi nhận lúc báo hỏng, sau đó là CreatedAt
+      const baselineTime = (expectedUpdatedAt && !isNaN(expectedUpdatedAt.getTime()))
+        ? expectedUpdatedAt.getTime()
+        : (createdAt && !isNaN(createdAt.getTime()) ? createdAt.getTime() : 0);
+
+      const isProgressed = ['Đang kiểm tra', 'Đang sửa chữa', 'Đã sửa xong (Chờ bàn giao)', 'Đã hoàn thành'].indexOf(currentStatus) !== -1;
+      const isNewer = currentUpdatedAt && !isNaN(currentUpdatedAt.getTime()) && baselineTime > 0 && currentUpdatedAt.getTime() > baselineTime;
+
+      // Tuyệt đối KHÔNG ghi đè nếu trạng thái đã tiến triển HOẶC đã có cập nhật MỚI HƠN mốc báo hỏng
+      // (bao gồm cả 'Hoạt động bình thường' nếu thiết bị được sửa xong/bàn giao lại ở mốc thời gian mới hơn!).
+      // Chỉ cho phép cập nhật khi trạng thái là 'Hoạt động bình thường' CŨ (trước hoặc cùng thời điểm báo hỏng).
+      const hasChangedStatus = expectedStatus && normalize_(currentStatus) !== normalize_(expectedStatus);
+      if (isProgressed || isNewer || hasChangedStatus) {
+        updateRowByObject_(SHEETS.pendingSync, currentItem.rowIndex, {
+          Status: 'SKIPPED_SUPERSEDED',
+          LastError: 'Trạng thái thiết bị hiện tại (' + currentStatus + ') đã tiến triển hoặc có cập nhật mới hơn (cập nhật lúc ' + (device['Ngày cập nhật'] || 'N/A') + '), không ghi đè.',
+          UpdatedAt: new Date()
+        });
+        skipped += 1;
+        return;
+      }
+
+      // 3. Thực hiện đồng bộ trạng thái vật lý và tổng hợp
+      try {
+        updateRowByObject_(SHEETS.devices, deviceRowIndex, {
+          'Hiện trạng thực tế': targetStatus,
+          'Ngày cập nhật': new Date()
+        });
+        syncDeviceStatusForDevice_(deviceId);
+        updateRowByObject_(SHEETS.pendingSync, currentItem.rowIndex, {
+          Status: 'COMPLETED',
+          LastError: '',
+          UpdatedAt: new Date()
+        });
+        succeeded += 1;
+      } catch (err) {
+        updateRowByObject_(SHEETS.pendingSync, currentItem.rowIndex, {
+          LastError: err.message || String(err),
+          RetryCount: (parseInt(currentItem.data.RetryCount || '0', 10) + 1),
+          UpdatedAt: new Date()
+        });
+      }
+    });
+  });
+
+  return {
+    success: true,
+    message: 'Đối soát đồng bộ: đã duyệt ' + processed + ', hoàn thành ' + succeeded + ', bỏ qua ' + skipped + '.',
+    processed: processed,
+    succeeded: succeeded,
+    skipped: skipped
+  };
+}
+
+function triggerReconcilePendingSyncs() {
+  return reconcilePendingSyncs_({ username: 'system_trigger', role: 'admin', 'Quyền hạn': 'admin' });
 }
 
 function approveRepair_(payload, actor) {
@@ -1854,35 +2658,42 @@ function approveRepair_(payload, actor) {
     processNote += '\n[Ảnh hoàn thành/xử lý]: ' + imageUrl;
   }
   
-  updateRowByObject_(SHEETS.repairs, idx + 2, {
-    'Trạng Thái': newStatus,
-    'Người duyệt': payload.approver || '',
-    'Ghi chú xử lý': processNote
-  });
+  let repairRow;
+  let deviceId = '';
+  withDeviceMutationLock_(function() {
+    const freshRows = getRows_(SHEETS.repairs);
+    const freshIndex = freshRows.findIndex(row => String(row['Thời gian']) === String(payload.rowId));
+    if (freshIndex < 0) throw new Error('Phiếu sửa chữa không còn tồn tại.');
+    repairRow = freshRows[freshIndex];
+    deviceId = String(repairRow['Mã Máy/Thiết bị'] || '').replace('[KHẨN] ', '').trim();
+    updateRowByObject_(SHEETS.repairs, freshIndex + 2, {
+      'Trạng Thái': newStatus,
+      'Người duyệt': payload.approver || '',
+      'Ghi chú xử lý': processNote
+    });
 
-  // Đồng bộ hiện trạng thiết bị nếu trạng thái sửa chữa thay đổi
-  const repairRow = rows[idx];
-  const deviceId = String(repairRow['Mã Máy/Thiết bị'] || '').replace('[KHẨN] ', '').trim();
-  if (deviceId) {
-    const deviceRowIndex = findDeviceRow_(deviceId);
-    if (deviceRowIndex >= 2) {
-      let deviceStatus = '';
-      const normalizedStatus = normalizeHeader_(newStatus);
-      if (normalizedStatus.indexOf('tuchoi') !== -1) deviceStatus = 'Đang sử dụng';
-      else if (normalizedStatus.indexOf('duyet') !== -1 || normalizedStatus.indexOf('kiemtra') !== -1) deviceStatus = 'Đang kiểm tra';
-      else if (normalizedStatus.indexOf('suaxong') !== -1) deviceStatus = 'Đã sửa xong - chờ bàn giao';
-      else if (normalizedStatus.indexOf('hoanthanh') !== -1) deviceStatus = 'Đang sử dụng';
-      else if (normalizedStatus.indexOf('sua') !== -1) deviceStatus = 'Đang sửa chữa';
-      else if (normalizedStatus.indexOf('hong') !== -1) deviceStatus = 'Hỏng';
-      if (deviceStatus) {
-        updateRowByObject_(SHEETS.devices, deviceRowIndex, {
-          'Hiện trạng thực tế': deviceStatus,
-          'Ngày cập nhật': new Date()
-        });
+    // Đồng bộ hiện trạng thiết bị nếu trạng thái sửa chữa thay đổi
+    if (deviceId) {
+      const deviceRowIndex = findDeviceRow_(deviceId);
+      if (deviceRowIndex >= 2) {
+        let deviceStatus = '';
+        const normalizedStatus = normalizeHeader_(newStatus);
+        if (normalizedStatus.indexOf('tuchoi') !== -1) deviceStatus = 'Đang sử dụng';
+        else if (normalizedStatus.indexOf('duyet') !== -1 || normalizedStatus.indexOf('kiemtra') !== -1) deviceStatus = 'Đang kiểm tra';
+        else if (normalizedStatus.indexOf('suaxong') !== -1) deviceStatus = 'Đã sửa xong - chờ bàn giao';
+        else if (normalizedStatus.indexOf('hoanthanh') !== -1) deviceStatus = 'Đang sử dụng';
+        else if (normalizedStatus.indexOf('sua') !== -1) deviceStatus = 'Đang sửa chữa';
+        else if (normalizedStatus.indexOf('hong') !== -1) deviceStatus = 'Hỏng';
+        if (deviceStatus) {
+          updateRowByObject_(SHEETS.devices, deviceRowIndex, {
+            'Hiện trạng thực tế': deviceStatus,
+            'Ngày cập nhật': new Date()
+          });
+        }
+        syncDeviceStatusForDevice_(deviceId);
       }
-      syncDeviceStatusForDevice_(deviceId);
     }
-  }
+  });
 
   // Gửi email thông báo cập nhật sửa chữa
   try {
@@ -2034,11 +2845,26 @@ function uploadDocumentFile_(payload, fallbackUrl) {
       folder = DriveApp.getRootFolder();
     }
 
-    const decoded = Utilities.base64Decode(payload.fileContent);
-    const blob = Utilities.newBlob(decoded, payload.mimeType || 'application/pdf', payload.fileName);
-    const file = folder.createFile(blob);
-    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-    fileUrl = file.getUrl();
+    assertFolderPrivate_(folder);
+
+    let createdFile = null;
+    try {
+      const decoded = Utilities.base64Decode(payload.fileContent);
+      const blob = Utilities.newBlob(decoded, payload.mimeType || 'application/pdf', payload.fileName);
+      createdFile = folder.createFile(blob);
+      applyFileAccessPolicy_(createdFile, folder);
+      fileUrl = createdFile.getUrl();
+    } catch (err) {
+      console.error('Lỗi khi tải tài liệu kiểm định:', err);
+      if (createdFile && typeof createdFile.setTrashed === 'function') {
+        try {
+          createdFile.setTrashed(true);
+        } catch (trashErr) {
+          console.error('Không thể dọn tệp tài liệu kiểm định lỗi:', trashErr);
+        }
+      }
+      throw new Error('Tải tài liệu kiểm định thất bại: ' + (err.message || String(err)));
+    }
   }
   return fileUrl || fallbackUrl || '';
 }
@@ -2080,6 +2906,9 @@ function updateDocStatus_(payload, actor) {
     ? String(payload.sentDate || '').trim()
     : '';
   if (requestedSentDate) {
+    if (!isValidDateString_(requestedSentDate)) {
+      return { success: false, message: 'Ngày gửi đăng kiểm không hợp lệ: ' + requestedSentDate + '. Định dạng hợp lệ: dd/MM/yyyy.' };
+    }
     updateData['Ngày gửi đăng kiểm'] = requestedSentDate;
   } else if (normalizeHeader_(status) === 'dagui') {
     updateData['Ngày gửi đăng kiểm'] = existingDoc['Ngày gửi đăng kiểm'] || todayDocumentDate_();
@@ -2115,6 +2944,16 @@ function addDocument_(payload, actor) {
   
   if (!deviceId || !docType) {
     return { success: false, message: 'Thiếu DeviceId hoặc Loại tài liệu.' };
+  }
+
+  if (payload.issuedDate && !isValidDateString_(payload.issuedDate)) {
+    return { success: false, message: 'Ngày cấp / Ngày Đăng kiểm không hợp lệ: ' + payload.issuedDate + '. Định dạng hợp lệ: dd/MM/yyyy.' };
+  }
+  if (payload.expiryDate && !isValidDateString_(payload.expiryDate)) {
+    return { success: false, message: 'Hạn đăng kiểm / Hạn hiệu lực không hợp lệ: ' + payload.expiryDate + '. Định dạng hợp lệ: dd/MM/yyyy.' };
+  }
+  if (payload.sentDate && !isValidDateString_(payload.sentDate)) {
+    return { success: false, message: 'Ngày gửi đăng kiểm không hợp lệ: ' + payload.sentDate + '. Định dạng hợp lệ: dd/MM/yyyy.' };
   }
   
   const devRows = getRows_(SHEETS.devices);
@@ -2232,6 +3071,16 @@ function renewDocument_(payload, actor) {
   const expiryDate = String(payload.expiryDate || '').trim();
   if (!deviceId || !expiryDate) {
     return { success: false, message: 'Thiếu DeviceId hoặc hạn đăng kiểm mới.' };
+  }
+
+  if (!isValidDateString_(expiryDate)) {
+    return { success: false, message: 'Hạn đăng kiểm mới không hợp lệ: ' + expiryDate + '. Định dạng hợp lệ: dd/MM/yyyy.' };
+  }
+  if (payload.issuedDate && !isValidDateString_(payload.issuedDate)) {
+    return { success: false, message: 'Ngày cấp / Ngày Đăng kiểm không hợp lệ: ' + payload.issuedDate + '. Định dạng hợp lệ: dd/MM/yyyy.' };
+  }
+  if (payload.sentDate && !isValidDateString_(payload.sentDate)) {
+    return { success: false, message: 'Ngày gửi đăng kiểm không hợp lệ: ' + payload.sentDate + '. Định dạng hợp lệ: dd/MM/yyyy.' };
   }
 
   const lock = documentMutationLock_();
@@ -2439,9 +3288,14 @@ function addCostEntry_(payload, actor) {
   if (!isFinite(amount) || amount <= 0) return { success: false, message: 'Chi phí phải là số lớn hơn 0.' };
   if (findDeviceRow_(deviceId) < 2) return { success: false, message: 'Không tìm thấy thiết bị.' };
 
-  const costId = String(payload.id || payload.costId || ('CP-' + Utilities.getUuid())).trim();
+  const costId = String(payload.id || payload.costId || ('CP-' + (typeof Utilities !== 'undefined' && Utilities.getUuid ? Utilities.getUuid() : (Date.now() + '-' + Math.random().toString(36).slice(2, 8))))).trim();
   const duplicated = getRows_(SHEETS.costEntries).some(row => String(row.CostId || '').trim() === costId);
   if (duplicated) return { success: false, message: 'Mã chi phí đã tồn tại.' };
+
+  const costDate = String(payload.date || '').trim();
+  if (costDate && !isValidDateString_(costDate)) {
+    return { success: false, message: 'Ngày chi phí không hợp lệ: ' + costDate + '. Định dạng hợp lệ: dd/MM/yyyy.' };
+  }
 
   const row = {
     CostId: costId,
@@ -3560,4 +4414,130 @@ function editUser_(payload) {
   }
   
   return { success: true, message: 'Cập nhật thông tin người dùng thành công.' };
+}
+// Form files are served through authenticated API calls, never by a public Drive link.
+const FORM_HEADERS = ['Id','Category','Title','TemplateId','Owner','SenderName','Department','CreatedAt','FileId','FileName','MimeType','RequestId','Active','ReplacesId'];
+const FORM_TYPES = {repair:true,transfer:true,purchase:true};
+const FORM_MIME = {pdf:'application/pdf',docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'};
+const FORM_MAX_BYTES = 8 * 1024 * 1024;
+
+function activeFormTemplates_() {
+  const rows=getRows_('FormTemplates');
+  const replaced=rows.map(r=>String(r.ReplacesId||''));
+  return rows.filter(r=>String(r.Active)!=='false' && !replaced.includes(String(r.Id)));
+}
+
+function formPublicRow_(r) {
+  return {id:r.Id,category:r.Category,title:r.Title,templateId:r.TemplateId,owner:r.Owner,senderName:r.SenderName,department:r.Department,createdAt:r.CreatedAt,fileName:r.FileName};
+}
+
+function formFileData_(payload) {
+  const name=String(payload.fileName||'').trim();
+  const ext=name.split('.').pop().toLowerCase();
+  const content=String(payload.fileContent||'');
+  if (!Object.prototype.hasOwnProperty.call(FORM_MIME,ext) || name.length>180 || /[\\/\x00-\x1f]/.test(name)) throw new Error('Chỉ nhận PDF, DOCX hoặc XLSX với tên tệp hợp lệ.');
+  if (!content || content.length>Math.ceil(FORM_MAX_BYTES/3)*4 || !/^[A-Za-z0-9+/]+={0,2}$/.test(content)) throw new Error('Tệp rỗng, không hợp lệ hoặc vượt 8 MB.');
+  const bytes=Utilities.base64Decode(content);
+  if (!bytes.length || bytes.length>FORM_MAX_BYTES) throw new Error('Tệp vượt 8 MB.');
+  const signature=bytes.slice(0,4).map(b=>(b+256)%256);
+  if (ext==='pdf' ? signature.join(',')!=='37,80,68,70' : signature.join(',')!=='80,75,3,4') throw new Error('Nội dung tệp không đúng định dạng đã chọn.');
+  return {name:name,mimeType:FORM_MIME[ext],bytes:bytes};
+}
+
+function assertFormVaultPrivate_(folder) {
+  const queue=[folder]; const seen={}; let count=0;
+  while(queue.length) {
+    const current=queue.pop(); const id=current.getId();
+    if(seen[id]) continue;
+    if(++count>100) throw new Error('Không thể xác minh toàn bộ thư mục lưu phiếu.');
+    seen[id]=true;
+    if(current.getSharingAccess()!==DriveApp.Access.PRIVATE || current.getEditors().length || current.getViewers().length) throw new Error('Thư mục lưu phiếu và các thư mục cha phải riêng tư, chỉ chủ sở hữu có quyền.');
+    // Advanced Drive checks group and inherited grants that DriveApp may omit.
+    if(typeof Drive==='undefined') throw new Error('Cần bật dịch vụ Drive API trong Apps Script để kiểm tra quyền kho phiếu.');
+    let pageToken;
+    do {
+      const options={fields:'permissions(id,type,role),nextPageToken'};
+      if(pageToken) options.pageToken=pageToken;
+      const result=Drive.Permissions.list(id,options);
+      if(!result || !Array.isArray(result.permissions) || !result.permissions.length || result.permissions.some(p=>p.role!=='owner' || p.type!=='user')) throw new Error('Kho phiếu có quyền chia sẻ ngoài chủ sở hữu hoặc chưa xác minh được quyền.');
+      pageToken=result.nextPageToken;
+    } while(pageToken);
+    const parents=current.getParents(); while(parents.hasNext()) queue.push(parents.next());
+  }
+}
+
+function formVaultFolder_() {
+  const folderId=PropertiesService.getScriptProperties().getProperty('FORM_VAULT_FOLDER_ID');
+  if(!folderId) throw new Error('Admin cần cấu hình thư mục lưu mẫu và phiếu trước khi tải lên.');
+  const folder=DriveApp.getFolderById(folderId);
+  assertFormVaultPrivate_(folder);
+  return folder;
+}
+
+function storeFormFile_(fileData) {
+  const folder=formVaultFolder_();
+  let file;
+  try {
+    file=folder.createFile(Utilities.newBlob(fileData.bytes,fileData.mimeType,fileData.name));
+    file.setSharing(DriveApp.Access.PRIVATE,DriveApp.Permission.VIEW);
+    assertFormVaultPrivate_(file);
+    return {fileId:file.getId()};
+  } catch(error) {
+    if(file) { try { file.setTrashed(true); } catch(cleanupError) { console.error('Không thể dọn tệp mẫu/phiếu:',cleanupError); } }
+    throw error;
+  }
+}
+
+function formLibraryRoute_(action,payload) {
+  const actor=requireAuthenticated_(payload);
+  if(!actor) return authError_();
+  const admin=isAdmin_(actor); const owner=userUsername_(actor);
+  if(!owner) return authError_();
+  const templateSheet='FormTemplates'; const submissionSheet='SubmittedForms';
+  ensureSheet_(templateSheet,FORM_HEADERS); ensureSheet_(submissionSheet,FORM_HEADERS);
+  if(action==='listFormTemplates') return {success:true,data:activeFormTemplates_().map(formPublicRow_)};
+  if(action==='listSubmittedForms') return {success:true,data:getRows_(submissionSheet).filter(r=>admin || normalize_(r.Owner)===normalize_(owner)).map(formPublicRow_)};
+  if(action==='removeFormTemplate') {
+    if(!admin) return {success:false,message:'Chỉ Admin được xóa mẫu.'};
+    return withDeviceMutationLock_(function() {
+      const entry=getRowsWithRowIndex_(templateSheet).find(r=>String(r.data.Id)===String(payload.id));
+      if(!entry) return {success:false,message:'Không tìm thấy mẫu.'};
+      updateRowByObject_(templateSheet,entry.rowIndex,{Active:'false'});
+      return {success:true,message:'Đã ngừng sử dụng mẫu; lịch sử phiếu được giữ lại.'};
+    });
+  }
+  if(action==='downloadFormFile') {
+    if(payload.kind!=='template' && payload.kind!=='submission') return {success:false,message:'Loại tệp không hợp lệ.'};
+    const row=getRows_(payload.kind==='template'?templateSheet:submissionSheet).find(r=>String(r.Id)===String(payload.id));
+    if(!row || (payload.kind==='submission' && !admin && normalize_(row.Owner)!==normalize_(owner))) return {success:false,message:'Không tìm thấy phiếu hoặc bạn không có quyền xem.'};
+    const bytes=DriveApp.getFileById(row.FileId).getBlob().getBytes();
+    if(bytes.length>FORM_MAX_BYTES) return {success:false,message:'Tệp vượt giới hạn tải xuống.'};
+    return {success:true,fileName:row.FileName,mimeType:row.MimeType,fileContent:Utilities.base64Encode(bytes)};
+  }
+  if(action==='uploadFormTemplate' && !admin) return {success:false,message:'Chỉ Admin được đăng mẫu phiếu.'};
+  if(!['uploadFormTemplate','submitForm'].includes(action)) return {success:false,message:'Thao tác không hợp lệ.'};
+  const requestId=String(payload.requestId||'').trim();
+  if(!requestId || requestId.length>150) return {success:false,message:'Thiếu mã yêu cầu hợp lệ.'};
+  let fileData;
+  try { fileData=formFileData_(payload); } catch(error) { return {success:false,message:error.message}; }
+  const title=String(payload.title||'').trim();
+  if(!title || title.length>200) return {success:false,message:'Nhập tiêu đề từ 1 đến 200 ký tự.'};
+  const template=action==='submitForm'?getRows_(templateSheet).find(r=>String(r.Id)===String(payload.templateId)):null;
+  const category=template?template.Category:payload.category;
+  if((action==='submitForm' && !template) || !Object.prototype.hasOwnProperty.call(FORM_TYPES,category)) return {success:false,message:'Chọn mẫu phiếu hợp lệ.'};
+  try { formVaultFolder_(); } catch(error) { return {success:false,message:error.message}; }
+  return handleIdempotentAction_(action,payload,actor,function() {
+    if(template && !activeFormTemplates_().some(r=>String(r.Id)===String(template.Id))) return {success:false,message:'Mẫu đã ngừng sử dụng. Hãy chọn mẫu mới.'};
+    if(payload.replaceId && (!admin || !activeFormTemplates_().some(r=>String(r.Id)===String(payload.replaceId) && r.Category===category))) return {success:false,message:'Mẫu cần thay thế không còn hợp lệ.'};
+    const sheet=action==='uploadFormTemplate'?templateSheet:submissionSheet;
+    const saved=storeFormFile_(fileData);
+    const id=Utilities.getUuid();
+    // Keep the private file on ambiguous append failures for administrative recovery.
+    return withDeviceMutationLock_(function() {
+    if(template && !activeFormTemplates_().some(r=>String(r.Id)===String(template.Id))) throw new Error('Mẫu đã thay đổi. Hãy tải lại danh sách mẫu.');
+    if(payload.replaceId && (!admin || !activeFormTemplates_().some(r=>String(r.Id)===String(payload.replaceId) && r.Category===category))) throw new Error('Mẫu cần thay thế không còn hợp lệ.');
+    appendObject_(sheet,{Active:'true',ReplacesId:action==='uploadFormTemplate'?String(payload.replaceId||''):'',Id:id,Category:category,Title:title,TemplateId:template?template.Id:'',Owner:owner,SenderName:userDisplayName_(actor),Department:userDepartment_(actor),CreatedAt:new Date().toISOString(),FileId:saved.fileId,FileName:fileData.name,MimeType:fileData.mimeType,RequestId:requestId});
+    return {success:true,id:id,message:action==='submitForm'?'Đã lưu phiếu của bạn.':'Đã đăng mẫu phiếu.'};
+    });
+  });
 }

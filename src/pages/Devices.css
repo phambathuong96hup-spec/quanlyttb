@@ -688,7 +688,13 @@
 }
 
 #print-area {
-  display: none;
+  position: fixed;
+  left: -99999px;
+  top: 0;
+  width: 192mm;
+  visibility: hidden;
+  pointer-events: none;
+  z-index: -9999;
 }
 
 @media (max-width: 768px) {
@@ -786,136 +792,262 @@
   }
 }
 
-/* Print Styles */
+/* Print Styles: exact same mm font card CSS on screen (for measurement) and print */
+#print-area .qr-print-sheet {
+  box-sizing: border-box;
+  width: 192mm;
+  height: 275.5mm;
+  max-height: 276mm;
+  margin: 0 auto;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, 62mm);
+  grid-template-rows: repeat(4, 67mm);
+  gap: 2.5mm 3mm;
+  justify-content: center;
+  align-content: start;
+}
+
+#print-area .print-page,
+#print-area .print-qr-card {
+  width: 62mm;
+  height: 67mm;
+  max-height: 67mm;
+  box-sizing: border-box;
+  overflow: hidden;
+  padding: 2mm 2.5mm;
+  border: 1px dashed #94a3b8;
+  border-radius: 2.5mm;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  font-family: Arial, sans-serif;
+  color: #0f172a;
+  background: #ffffff;
+}
+
+#print-area .print-qr-org {
+  max-width: 100%;
+  font-size: 7.8px;
+  font-weight: 800;
+  line-height: 1.1;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  text-align: center;
+  word-break: break-word;
+}
+
+#print-area .print-qr-subtitle {
+  margin: 0.3mm 0 0.6mm;
+  color: #334155;
+  font-size: 6.8px;
+  line-height: 1;
+  text-align: center;
+}
+
+#print-area .print-qr-image-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0.3mm 0;
+}
+
+#print-area .print-qr-card svg {
+  flex: 0 0 auto;
+  width: 24mm;
+  height: 24mm;
+  min-width: 23mm;
+  min-height: 23mm;
+  background: #ffffff;
+}
+
+#print-area .print-qr-code-list {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.6mm;
+  max-width: 100%;
+  margin-top: 1mm;
+}
+
+#print-area .print-qr-code-list span {
+  max-width: 100%;
+  padding: 0.3mm 1mm;
+  border: 1px solid #cbd5e1;
+  border-radius: 1.5mm;
+  background: #f8fafc;
+  color: #0f172a;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 7.2px;
+  font-weight: 700;
+  line-height: 1.1;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#print-area .print-qr-name {
+  display: block;
+  max-width: 100%;
+  margin: 1mm 0 0.4mm;
+  color: #0f172a;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1.15;
+  text-align: center;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#print-area .print-qr-department {
+  display: block;
+  max-width: 100%;
+  margin: 0;
+  color: #334155;
+  font-size: 7.5px;
+  font-weight: 600;
+  line-height: 1.15;
+  text-align: center;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Adaptive compact level: tightened spacing and scaled down font */
+#print-area .print-qr-card.is-compact {
+  padding: 1.5mm 2mm;
+}
+
+#print-area .print-qr-card.is-compact .print-qr-org {
+  font-size: 7.4px;
+}
+
+#print-area .print-qr-card.is-compact .print-qr-subtitle {
+  font-size: 6.6px;
+  margin: 0.2mm 0 0.4mm;
+}
+
+#print-area .print-qr-card.is-compact svg {
+  width: 23.5mm;
+  height: 23.5mm;
+}
+
+#print-area .print-qr-card.is-compact .print-qr-code-list {
+  margin-top: 0.6mm;
+  gap: 0.5mm;
+}
+
+#print-area .print-qr-card.is-compact .print-qr-code-list span {
+  font-size: 6.8px;
+  padding: 0.2mm 0.8mm;
+  line-height: 1.05;
+}
+
+#print-area .print-qr-card.is-compact .print-qr-name {
+  font-size: 7.2px;
+  line-height: 1.1;
+  margin: 0.6mm 0 0.3mm;
+}
+
+#print-area .print-qr-card.is-compact .print-qr-department {
+  font-size: 7px;
+  line-height: 1.1;
+}
+
+/* Adaptive tight level: readable minimum (~7px) font, minimal spacing, QR >= 23mm */
+#print-area .print-qr-card.is-tight {
+  padding: 1.2mm 1.6mm;
+}
+
+#print-area .print-qr-card.is-tight .print-qr-org {
+  font-size: 7px;
+}
+
+#print-area .print-qr-card.is-tight .print-qr-subtitle {
+  font-size: 6.5px;
+  margin: 0.1mm 0 0.3mm;
+}
+
+#print-area .print-qr-card.is-tight svg {
+  width: 23mm;
+  height: 23mm;
+  min-width: 23mm;
+  min-height: 23mm;
+}
+
+#print-area .print-qr-card.is-tight .print-qr-code-list {
+  margin-top: 0.4mm;
+  gap: 0.4mm;
+}
+
+#print-area .print-qr-card.is-tight .print-qr-code-list span {
+  font-size: 6.6px;
+  padding: 0.2mm 0.6mm;
+  line-height: 1.02;
+}
+
+#print-area .print-qr-card.is-tight .print-qr-name {
+  font-size: 7px;
+  line-height: 1.05;
+  margin: 0.4mm 0 0.2mm;
+}
+
+#print-area .print-qr-card.is-tight .print-qr-department {
+  font-size: 6.8px;
+  line-height: 1.05;
+}
+
 @media print {
   @page {
-    size: A4;
+    size: A4 portrait;
     margin: 8mm;
   }
 
-  body * {
-    visibility: hidden;
+  body.printing-device-qr {
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    overflow: visible !important;
+    height: auto !important;
+    min-height: 0 !important;
   }
 
-  #print-area, #print-area * {
-    visibility: visible;
+  /* Isolate QR printing: hide all other direct body children like #root */
+  body.printing-device-qr > *:not(#print-area) {
+    display: none !important;
   }
 
-  #print-area {
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: 100%;
-    margin: 0;
-    padding: 0;
-    display: grid;
-    grid-template-columns: repeat(3, 58mm);
-    grid-auto-rows: 74mm;
-    gap: 5mm 6mm;
-    align-items: start;
-    justify-content: start;
+  body.printing-device-qr #print-area {
+    display: block !important;
+    position: static !important;
+    left: auto !important;
+    top: auto !important;
+    visibility: visible !important;
+    background: transparent !important;
+    z-index: auto !important;
   }
 
-  .print-page,
-  .print-qr-card {
+  body.printing-device-qr #print-area,
+  body.printing-device-qr #print-area * {
+    visibility: visible !important;
+  }
+
+  #print-area .qr-print-sheet {
     page-break-inside: avoid;
     break-inside: avoid;
-    width: 58mm;
-    min-height: 74mm;
-    box-sizing: border-box;
-    overflow: hidden;
-    padding: 5mm 4mm;
-    border: 1px dashed #94a3b8;
-    border-radius: 3mm;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    text-align: center;
-    font-family: Arial, sans-serif;
-    color: #0f172a;
+    page-break-after: always;
+    break-after: page;
   }
 
-  .print-qr-org {
-    max-width: 100%;
-    overflow: hidden;
-    font-size: 9px;
-    font-weight: 700;
-    line-height: 1.1;
-    text-overflow: ellipsis;
-    text-transform: uppercase;
-    white-space: nowrap;
+  #print-area .qr-print-sheet:last-child {
+    page-break-after: auto;
+    break-after: auto;
   }
 
-  .print-qr-subtitle {
-    margin: 1mm 0 3mm;
-    color: #334155;
-    font-size: 8px;
-    line-height: 1;
-  }
-
-  .print-qr-card svg {
-    flex: 0 0 auto;
-    width: 25mm;
-    height: 25mm;
-  }
-
-  .print-qr-code-list {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 1mm;
-    max-width: 100%;
-    max-height: 14mm;
-    margin-top: 3mm;
-    overflow: hidden;
-    overflow-wrap: anywhere;
-    word-break: break-word;
-  }
-
-  .print-qr-code-list span {
-    max-width: 100%;
-    padding: 1mm 1.5mm;
-    border: 1px solid #cbd5e1;
-    border-radius: 2mm;
-    background: #f8fafc;
-    color: #0f172a;
-    font-family: "Cascadia Mono", Consolas, monospace;
-    font-size: 8px;
-    font-weight: 700;
-    line-height: 1.15;
-  }
-
-  .print-qr-hidden-count {
-    color: #475569 !important;
-    font-family: Arial, sans-serif !important;
-  }
-
-  .print-qr-name {
-    display: -webkit-box;
-    max-width: 100%;
-    margin: 2mm 0 1mm;
-    overflow: hidden;
-    color: #0f172a;
-    font-size: 9px;
-    font-weight: 700;
-    line-height: 1.2;
-    overflow-wrap: anywhere;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-  }
-
-  .print-qr-department {
-    display: -webkit-box;
-    max-width: 100%;
-    margin: 0;
-    overflow: hidden;
-    color: #334155;
-    font-size: 8px;
-    font-weight: 600;
-    line-height: 1.2;
-    overflow-wrap: anywhere;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 1;
+  #print-area .print-page,
+  #print-area .print-qr-card {
+    page-break-inside: avoid;
+    break-inside: avoid;
   }
 }
 
