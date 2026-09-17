@@ -119,7 +119,7 @@ test('a forged client session without a server token cannot open protected route
   await page.goto('/dashboard');
 
   await expect(page).toHaveURL(/\/login$/);
-  await expect(page.getByRole('button', { name: 'Đăng nhập' })).toBeVisible();
+  await expect(page.locator('form').getByRole('button', { name: 'Đăng nhập', exact: true })).toBeVisible();
 });
 
 test('an invalid server session clears local auth and redirects to login', async ({ page }) => {
