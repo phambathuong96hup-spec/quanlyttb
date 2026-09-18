@@ -1,5 +1,6 @@
 export interface AiCitationReference {
   reference_id?: string;
+  referenceId?: string;
   file_path?: string;
   content?: string[];
   document_title?: string;
@@ -10,6 +11,21 @@ export interface AiCitationReference {
   sectionTitle?: string;
   excerpt?: string;
 }
+
+export interface NormalizedCitation {
+  referenceId?: string;
+  reference_id?: string;
+  documentTitle: string;
+  document_title?: string;
+  sectionTitle?: string;
+  section_title?: string;
+  fileName?: string;
+  file_path?: string;
+  content?: string[];
+  excerpt?: string;
+}
+
+export type CitationItem = AiCitationReference | NormalizedCitation;
 
 interface DocumentHint {
   aliases: string[];
@@ -53,33 +69,50 @@ const truncate = (value: string, maxLength = 260) => {
   return `${cleaned.slice(0, maxLength - 3).trim()}...`;
 };
 
-const citationKey = (reference: AiCitationReference) => [
-  reference.reference_id || '',
+const citationKey = (reference: CitationItem) => [
+  reference.reference_id || reference.referenceId || '',
   reference.file_path || '',
   reference.fileName || '',
   reference.sectionTitle || reference.section_title || '',
+  reference.documentTitle || reference.document_title || '',
 ].join('|');
 
-const citationTitle = (reference: AiCitationReference, index: number) => {
-  if (reference.documentTitle || reference.document_title) {
-    return reference.documentTitle || reference.document_title;
-  }
+const citationTitle = (reference: CitationItem, index: number): string => {
+  const explicitTitle = reference.documentTitle || reference.document_title;
+  if (explicitTitle) return explicitTitle;
   if (reference.fileName) return reference.fileName;
   if (reference.file_path) return basename(reference.file_path);
   return `Nguồn ${index + 1}`;
 };
 
-const citationFile = (reference: AiCitationReference) => (
+const citationFile = (reference: CitationItem) => (
   reference.file_path || reference.fileName || ''
 );
 
-const citationExcerpt = (reference: AiCitationReference) => (
+const citationExcerpt = (reference: CitationItem) => (
   reference.excerpt || reference.content?.find(Boolean) || ''
 );
 
-const citationSection = (reference: AiCitationReference) => (
+const citationSection = (reference: CitationItem) => (
   reference.sectionTitle || reference.section_title || ''
 );
+
+export const normalizeCitationReference = (
+  reference: AiCitationReference,
+  index = 0,
+): NormalizedCitation => {
+  const documentTitle = citationTitle(reference, index);
+  const sectionTitle = citationSection(reference).trim() || undefined;
+  const fileName = citationFile(reference).trim() || undefined;
+  const excerpt = citationExcerpt(reference).trim() || undefined;
+  return {
+    referenceId: reference.reference_id || reference.referenceId,
+    documentTitle: documentTitle.trim(),
+    sectionTitle,
+    fileName,
+    excerpt,
+  };
+};
 
 const findDocumentHint = (query: string) => {
   const normalizedQuery = normalizeForMatch(query);
@@ -89,7 +122,7 @@ const findDocumentHint = (query: string) => {
 };
 
 const referenceMatchesHint = (
-  reference: AiCitationReference,
+  reference: CitationItem,
   hint: DocumentHint,
 ) => {
   const searchable = normalizeForMatch([
@@ -98,6 +131,7 @@ const referenceMatchesHint = (
     reference.fileName,
     reference.file_path,
     reference.reference_id,
+    reference.referenceId,
   ].filter(Boolean).join(' '));
   return hint.aliases.some(alias => searchable.includes(normalizeForMatch(alias)));
 };

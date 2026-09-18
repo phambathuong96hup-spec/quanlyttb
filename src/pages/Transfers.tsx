@@ -590,7 +590,7 @@ const Transfers: React.FC<TransfersProps> = ({ defaultTab = 'requests' }) => {
                     <div className="transfer-ai-heading">
                       <span className="transfer-ai-icon"><Sparkles size={16} /></span>
                       <div>
-                        <strong>AI đề xuất thiết bị trống cùng loại</strong>
+                        <strong>Gợi ý thiết bị trống cùng loại (Thuật toán Stock Guard)</strong>
                         <small>Luôn giữ tối thiểu 1 thiết bị cùng loại tại HSCC và Nhi.</small>
                       </div>
                     </div>

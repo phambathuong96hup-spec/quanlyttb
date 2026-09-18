@@ -147,14 +147,27 @@ const prepareIndex = (index: LegalRagIndex): PreparedIndex => {
   };
 };
 
+export const clearLocalLegalRagIndex = () => {
+  indexPromise = null;
+};
+
 const loadIndex = async () => {
   if (!indexPromise) {
-    indexPromise = fetch(RAG_INDEX_URL)
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    indexPromise = fetch(RAG_INDEX_URL, { signal: controller.signal })
       .then((response) => {
         if (!response.ok) throw new Error(`Không tải được chỉ mục RAG (${response.status})`);
         return response.json() as Promise<LegalRagIndex>;
       })
-      .then(prepareIndex);
+      .then(prepareIndex)
+      .catch((err) => {
+        indexPromise = null;
+        throw err;
+      })
+      .finally(() => {
+        clearTimeout(timeout);
+      });
   }
   return indexPromise;
 };

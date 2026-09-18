@@ -4,7 +4,12 @@
  */
 
 import { queryLocalLegalRag } from './legalRagService.ts';
-import { formatReferencesForDisplay, type AiCitationReference } from './aiCitations.ts';
+import {
+  formatReferencesForDisplay,
+  normalizeCitationReference,
+  type AiCitationReference,
+  type NormalizedCitation,
+} from './aiCitations.ts';
 
 const viteEnv = import.meta.env ?? {};
 
@@ -56,16 +61,27 @@ interface QueryResponse {
   references?: QueryReference[];
 }
 
-interface QueryReference extends AiCitationReference {
+export type AnswerSource = 'cloud_llm' | 'cloud_retrieval' | 'local_rag' | 'neutral';
+
+export interface StreamMeta {
+  source?: AnswerSource;
+  references?: NormalizedCitation[];
+  llm_error?: string;
+  isInterrupted?: boolean;
+}
+
+export interface QueryReference extends AiCitationReference {
   reference_id?: string;
   file_path?: string;
   content?: string[];
 }
 
-interface StreamPayload {
+export interface StreamPayload {
   response?: string;
   references?: QueryReference[];
   error?: string;
+  answer_source?: 'llm' | 'retrieval_fallback' | string;
+  llm_error?: string;
 }
 
 interface DocumentStatusCountsResponse {
@@ -140,12 +156,17 @@ const hasRemoteIndexedDocuments = async () => {
 
 const queryLocalFallback = async (
   query: string,
-  onChunk: (text: string) => void,
-  onDone: () => void,
+  onChunk: (text: string, meta?: StreamMeta) => void,
+  onDone: (meta?: StreamMeta) => void,
 ) => {
   const answer = await queryLocalLegalRag(query);
-  onChunk(answer.response);
-  onDone();
+  const references: NormalizedCitation[] = answer.references.map((r, i) => normalizeCitationReference(r, i));
+  const meta: StreamMeta = {
+    source: 'local_rag',
+    references,
+  };
+  onChunk(answer.response, meta);
+  onDone(meta);
 };
 
 // ==================== API Functions ====================
@@ -219,10 +240,12 @@ export const queryAI = async (request: QueryRequest): Promise<string> => {
  */
 export const queryAIStream = async (
   request: QueryRequest,
-  onChunk: (text: string) => void,
-  onDone: () => void,
-  onError: (err: Error) => void,
+  onChunk: (text: string, meta?: StreamMeta) => void,
+  onDone: (meta?: StreamMeta) => void,
+  onError: (err: Error, meta?: StreamMeta) => void,
+  options?: { signal?: AbortSignal },
 ): Promise<void> => {
+  if (options?.signal?.aborted) return;
   if (!AI_BASE_URL) {
     await queryLocalFallback(request.query, onChunk, onDone);
     return;
@@ -230,6 +253,17 @@ export const queryAIStream = async (
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 45_000);
+
+  if (options?.signal) {
+    options.signal.addEventListener('abort', () => controller.abort(), { once: true });
+  }
+
+  let currentSource: AnswerSource = 'neutral';
+  let llmError: string | undefined;
+  const references: NormalizedCitation[] = [];
+  let buffer = '';
+  let remoteResponse = '';
+  let shouldUseLocalFallback = false;
   let hasEmittedRemoteResponse = false;
 
   try {
@@ -255,14 +289,33 @@ export const queryAIStream = async (
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
-    const references: QueryReference[] = [];
-    let buffer = '';
-    let remoteResponse = '';
-    let shouldUseLocalFallback = false;
 
     const handlePayload = (payload: StreamPayload) => {
+      if (options?.signal?.aborted) return;
       if (payload.error) throw new Error(payload.error);
-      if (payload.references?.length) references.push(...payload.references);
+      if (payload.references?.length) {
+        payload.references.forEach((r, idx) => {
+          const norm = normalizeCitationReference(r, references.length + idx);
+          const isDuplicate = references.some(
+            existing =>
+              (norm.referenceId && existing.referenceId === norm.referenceId) ||
+              (existing.documentTitle === norm.documentTitle &&
+                existing.sectionTitle === norm.sectionTitle &&
+                existing.fileName === norm.fileName),
+          );
+          if (!isDuplicate) {
+            references.push(norm);
+          }
+        });
+      }
+      if (payload.answer_source === 'retrieval_fallback') {
+        currentSource = 'cloud_retrieval';
+      } else if (payload.answer_source === 'llm') {
+        currentSource = 'cloud_llm';
+      }
+      if (payload.llm_error) {
+        llmError = payload.llm_error;
+      }
       if (payload.response) {
         remoteResponse += payload.response;
         if (hasNoRemoteContext(payload.response)) {
@@ -270,11 +323,16 @@ export const queryAIStream = async (
           return;
         }
         hasEmittedRemoteResponse = true;
-        onChunk(payload.response);
+        onChunk(payload.response, {
+          source: currentSource,
+          references,
+          llm_error: llmError,
+        });
       }
     };
 
     const handleLine = (line: string) => {
+      if (options?.signal?.aborted) return;
       const trimmed = line.trim();
       if (!trimmed) return;
 
@@ -284,7 +342,11 @@ export const queryAIStream = async (
         if (err instanceof SyntaxError) {
           remoteResponse += line;
           hasEmittedRemoteResponse = true;
-          onChunk(line);
+          onChunk(line, {
+            source: currentSource,
+            references,
+            llm_error: llmError,
+          });
           return;
         }
         throw err;
@@ -293,6 +355,14 @@ export const queryAIStream = async (
 
     let isReading = true;
     while (isReading) {
+      if (options?.signal?.aborted) {
+        try {
+          await reader.cancel();
+        } catch {
+          // Stream cancelled
+        }
+        return;
+      }
       const { done, value } = await reader.read();
       if (done) {
         isReading = false;
@@ -313,17 +383,39 @@ export const queryAIStream = async (
       }
     }
 
+    if (options?.signal?.aborted) return;
     if (buffer.trim()) handleLine(buffer);
     if (shouldUseLocalFallback || hasNoRemoteContext(remoteResponse)) {
       await queryLocalFallback(request.query, onChunk, onDone);
       return;
     }
     const sources = formatReferencesForDisplay(references, request.query);
-    if (sources) onChunk(sources);
-    onDone();
+    if (sources) {
+      onChunk(sources, {
+        source: currentSource,
+        references,
+        llm_error: llmError,
+      });
+    }
+    onDone({
+      source: currentSource,
+      references,
+      llm_error: llmError,
+    });
   } catch (err) {
+    if (options?.signal?.aborted) {
+      return;
+    }
     if (hasEmittedRemoteResponse) {
-      onDone();
+      onError(
+        err instanceof Error ? err : new Error(String(err)),
+        {
+          source: currentSource,
+          references,
+          llm_error: llmError,
+          isInterrupted: true,
+        },
+      );
       return;
     }
     try {

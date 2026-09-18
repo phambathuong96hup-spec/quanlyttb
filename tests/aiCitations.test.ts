@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { formatReferencesForDisplay } from '../src/services/aiCitations.ts';
+import { formatReferencesForDisplay, normalizeCitationReference } from '../src/services/aiCitations.ts';
 
 test('AI citations show numbered source details with file, reference id, and excerpt', () => {
   const formatted = formatReferencesForDisplay([
@@ -77,4 +77,39 @@ test('AI citations prioritize the requested regulation, direct overlap, and cap 
   assert.match(formatted, /Mục\/phần: Điều 3\. Nguyên tắc quản lý trang thiết bị y tế/);
   assert.doesNotMatch(formatted, /Thông tư 19|tt-19-noise/);
   assert.equal((formatted.match(/^\d+\. /gm) || []).length, 3);
+});
+
+test('normalizeCitationReference maps both snake_case and camelCase citations correctly', () => {
+  // Backend snake_case
+  const snakeCase = normalizeCitationReference({
+    reference_id: 'ref-1',
+    document_title: 'Nghị định 98/2021/NĐ-CP',
+    section_title: 'Điều 10',
+    file_path: '/docs/nd98.docx',
+    content: ['Nội dung điều 10'],
+  });
+  assert.equal(snakeCase.referenceId, 'ref-1');
+  assert.equal(snakeCase.documentTitle, 'Nghị định 98/2021/NĐ-CP');
+  assert.equal(snakeCase.sectionTitle, 'Điều 10');
+  assert.equal(snakeCase.fileName, '/docs/nd98.docx');
+  assert.equal(snakeCase.excerpt, 'Nội dung điều 10');
+
+  // Local camelCase
+  const camelCase = normalizeCitationReference({
+    referenceId: 'local-1',
+    documentTitle: 'Thông tư 05/2022/TT-BYT',
+    sectionTitle: 'Điều 4',
+    fileName: 'tt05.json',
+    excerpt: 'Quy định phân loại thiết bị',
+  });
+  assert.equal(camelCase.documentTitle, 'Thông tư 05/2022/TT-BYT');
+  assert.equal(camelCase.sectionTitle, 'Điều 4');
+  assert.equal(camelCase.fileName, 'tt05.json');
+  assert.equal(camelCase.excerpt, 'Quy định phân loại thiết bị');
+
+  // Missing title fallbacks to file basename
+  const fallback = normalizeCitationReference({
+    file_path: '/path/to/tai-lieu-kiem-dinh.pdf',
+  }, 0);
+  assert.equal(fallback.documentTitle, 'tai-lieu-kiem-dinh.pdf');
 });
