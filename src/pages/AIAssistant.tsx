@@ -1,10 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Bot, Sparkles, Send, Loader2, RefreshCw, AlertCircle, BookOpen, Globe, Cpu, ChevronRight } from 'lucide-react';
+import { Bot, Sparkles, Send, Loader2, RefreshCw, AlertCircle, BookOpen, Globe, ChevronRight } from 'lucide-react';
 import { getAIBackendInfo, queryAIStream, type ChatMessage, type StreamMeta } from '../services/aiService.ts';
-import { queryLocalLegalRag, type LegalRagAnswer } from '../services/legalRagService.ts';
 import './AIAssistant.css';
 
-export type MessageSource = 'cloud_llm' | 'cloud_retrieval' | 'local_rag' | 'neutral' | 'cloud' | 'local';
+export type MessageSource = 'cloud_llm' | 'cloud_retrieval' | 'neutral' | 'cloud';
 
 interface DisplayMessage extends ChatMessage {
   id: string;
@@ -19,9 +18,6 @@ interface DisplayMessage extends ChatMessage {
 
 const getSourceDisplay = (source?: MessageSource) => {
   switch (source) {
-    case 'local':
-    case 'local_rag':
-      return { label: 'Local RAG', className: 'local' };
     case 'cloud_retrieval':
       return { label: 'Trích đoạn Cloud', className: 'retrieval' };
     case 'cloud_llm':
@@ -50,9 +46,9 @@ Tôi có thể hỗ trợ bạn tra cứu và đối chiếu các thông tin:
 - Xử phạt vi phạm hành chính: Theo Nghị định 117/2020/NĐ-CP trong lĩnh vực trang thiết bị y tế.
 - Định mức kỹ thuật 2026: Bảng định mức vật tư và thiết bị của 18 khoa/phòng bệnh viện.
 
-*Hệ thống ưu tiên sử dụng Máy chủ AI Đám mây. Khi máy chủ gặp sự cố hoặc gián đoạn, hệ thống chuyển sang tra cứu trên Bộ chỉ mục Tri thức Cục bộ (nạp qua tệp JSON trên trình duyệt nếu đã tải hoặc mạng nội bộ còn truy cập được).*`,
+*Trợ lý truy vấn máy chủ AI qua Internet. Nếu kết nối gặp sự cố, vui lòng thử gửi lại câu hỏi.*`,
   timestamp: Date.now(),
-  source: 'local',
+  source: 'neutral',
 };
 
 const AIAssistant: React.FC = () => {
@@ -62,7 +58,7 @@ const AIAssistant: React.FC = () => {
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [activeSource, setActiveSource] = useState<'cloud' | 'local' | 'retrieval' | 'neutral'>(
-    backend.isConfigured ? 'neutral' : 'local',
+    'neutral',
   );
 
   const activeSessionIdRef = useRef(0);
@@ -93,10 +89,10 @@ const AIAssistant: React.FC = () => {
     }
     setIsLoading(false);
     setMessages([WELCOME_MESSAGE]);
-    setActiveSource(backend.isConfigured ? 'neutral' : 'local');
+    setActiveSource('neutral');
   };
 
-  const handleSend = async (userQuery?: string) => {
+  const handleSend = async (userQuery: string | undefined, timestamp: number) => {
     const queryText = (userQuery ?? inputValue).trim();
     if (!queryText || isLoading) return;
 
@@ -111,17 +107,17 @@ const AIAssistant: React.FC = () => {
     activeAbortControllerRef.current = controller;
 
     const userMessage: DisplayMessage = {
-      id: `user-${Date.now()}`,
+      id: `user-${currentSessionId}`,
       role: 'user',
       content: queryText,
-      timestamp: Date.now(),
+      timestamp,
     };
 
     setMessages(prev => [...prev, userMessage]);
     setInputValue('');
     setIsLoading(true);
 
-    const assistantMsgId = `assistant-${Date.now()}`;
+    const assistantMsgId = `assistant-${currentSessionId}`;
     let streamedText = '';
 
     const addOrUpdateAssistantMessage = (
@@ -137,7 +133,7 @@ const AIAssistant: React.FC = () => {
           id: assistantMsgId,
           role: 'assistant',
           content: text,
-          timestamp: Date.now(),
+          timestamp,
           source,
           references,
         };
@@ -155,40 +151,14 @@ const AIAssistant: React.FC = () => {
       });
     };
 
-    const runLocalFallback = async () => {
+    const showConnectionError = () => {
       if (activeSessionIdRef.current !== currentSessionId) return;
-      setActiveSource('local');
-      try {
-        const localAnswer: LegalRagAnswer = await queryLocalLegalRag(queryText);
-        if (activeSessionIdRef.current !== currentSessionId) return;
-        addOrUpdateAssistantMessage(
-          localAnswer.response,
-          'local_rag',
-          localAnswer.references.map(r => ({
-            documentTitle: r.documentTitle,
-            sectionTitle: r.sectionTitle,
-            fileName: r.fileName,
-            excerpt: r.excerpt,
-          })),
-        );
-      } catch {
-        if (activeSessionIdRef.current !== currentSessionId) return;
-        addOrUpdateAssistantMessage(
-          'Không thể hoàn tất tra cứu từ cả máy chủ AI và bộ chỉ mục nội bộ. Vui lòng kiểm tra lại kết nối.',
-          'local_rag',
-        );
-      } finally {
-        if (activeSessionIdRef.current === currentSessionId) {
-          setIsLoading(false);
-          activeAbortControllerRef.current = null;
-        }
-      }
+      setActiveSource('neutral');
+      addOrUpdateAssistantMessage('Không thể kết nối máy chủ AI. Vui lòng kiểm tra kết nối và gửi lại câu hỏi.', 'neutral');
+      setIsLoading(false);
+      activeAbortControllerRef.current = null;
     };
-
-    if (!backend.isConfigured) {
-      await runLocalFallback();
-      return;
-    }
+    if (!backend.isConfigured) { showConnectionError(); return; }
 
     try {
       let isCompleted = false;
@@ -204,9 +174,7 @@ const AIAssistant: React.FC = () => {
           if (activeSessionIdRef.current !== currentSessionId) return;
           streamedText += chunk;
           const currentMetaSource: MessageSource = meta?.source || 'neutral';
-          if (currentMetaSource === 'local_rag') {
-            setActiveSource('local');
-          } else if (currentMetaSource === 'cloud_retrieval') {
+          if (currentMetaSource === 'cloud_retrieval') {
             setActiveSource('retrieval');
           } else if (currentMetaSource === 'cloud_llm') {
             setActiveSource('cloud');
@@ -230,9 +198,7 @@ const AIAssistant: React.FC = () => {
           setIsLoading(false);
           activeAbortControllerRef.current = null;
           const finalSource: MessageSource = meta?.source || 'neutral';
-          if (finalSource === 'local_rag') {
-            setActiveSource('local');
-          } else if (finalSource === 'cloud_retrieval') {
+          if (finalSource === 'cloud_retrieval') {
             setActiveSource('retrieval');
           } else if (finalSource === 'cloud_llm') {
             setActiveSource('cloud');
@@ -270,7 +236,7 @@ const AIAssistant: React.FC = () => {
               })),
             );
           } else if (!isCompleted) {
-            void runLocalFallback();
+            showConnectionError();
           }
         },
         { signal: controller.signal },
@@ -278,7 +244,7 @@ const AIAssistant: React.FC = () => {
     } catch {
       if (activeSessionIdRef.current !== currentSessionId) return;
       if (!streamedText) {
-        await runLocalFallback();
+        showConnectionError();
       } else {
         setIsLoading(false);
         activeAbortControllerRef.current = null;
@@ -289,7 +255,7 @@ const AIAssistant: React.FC = () => {
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      void handleSend();
+      void handleSend(undefined, performance.timeOrigin + e.timeStamp);
     }
   };
 
@@ -309,21 +275,14 @@ const AIAssistant: React.FC = () => {
         <div className="ai-header-actions">
           <div
             className={`ai-status-indicator ${
-              activeSource === 'local'
-                ? 'status-local'
-                : activeSource === 'retrieval'
+              activeSource === 'retrieval'
                 ? 'status-retrieval'
                 : activeSource === 'neutral'
                 ? 'status-neutral'
                 : 'status-cloud'
             }`}
           >
-            {activeSource === 'local' ? (
-              <>
-                <Cpu size={14} />
-                <span>Chỉ mục Cục bộ (Local RAG)</span>
-              </>
-            ) : activeSource === 'retrieval' ? (
+            {activeSource === 'retrieval' ? (
               <>
                 <Globe size={14} />
                 <span>Trích đoạn Đám mây (Không qua LLM)</span>
@@ -383,7 +342,7 @@ const AIAssistant: React.FC = () => {
         <div className="ai-notice-banner" role="status">
           <AlertCircle size={16} />
           <span>
-            Trợ lý AI chưa khả dụng trên máy chủ đám mây (cần đặt biến <code>VITE_AI_API_URL</code> thành địa chỉ dịch vụ AI hợp lệ). Hệ thống đang kích hoạt chế độ Tra cứu Cục bộ (Local RAG) trực tiếp trên trình duyệt.
+            Trợ lý AI chưa khả dụng trên máy chủ đám mây (cần đặt biến <code>VITE_AI_API_URL</code> thành địa chỉ dịch vụ AI hợp lệ). Vui lòng liên hệ quản trị viên để khôi phục dịch vụ.
           </span>
         </div>
       )}
@@ -476,7 +435,7 @@ const AIAssistant: React.FC = () => {
                     key={idx}
                     type="button"
                     className="ai-suggestion-btn"
-                    onClick={() => void handleSend(suggestion)}
+                    onClick={() => void handleSend(suggestion, Date.now())}
                     disabled={isLoading}
                   >
                     <span>{suggestion}</span>
@@ -502,7 +461,7 @@ const AIAssistant: React.FC = () => {
               <button
                 type="button"
                 className="ai-send-btn"
-                onClick={() => void handleSend()}
+                onClick={() => void handleSend(undefined, Date.now())}
                 disabled={!inputValue.trim() || isLoading}
                 aria-label="Gửi câu hỏi"
               >

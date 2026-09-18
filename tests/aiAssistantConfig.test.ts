@@ -33,16 +33,16 @@ test('remote-only AI document APIs fail closed when no valid backend URL exists'
   assert.match(service, /fetchDocuments[\s\S]+requireAIBaseUrl\(\)/);
 });
 
-test('AI page integrates Native Chat UI with queryAIStream and Local RAG fallback', () => {
+test('AI page integrates Native Chat UI with remote-only queryAIStream', () => {
   const page = readFileSync('src/pages/AIAssistant.tsx', 'utf8');
 
   assert.match(page, /import\s*\{[^}]*queryAIStream/);
-  assert.match(page, /import\s*\{[^}]*queryLocalLegalRag/);
-  assert.match(page, /runLocalFallback/);
+  assert.doesNotMatch(page, /queryLocalLegalRag/);
+  assert.doesNotMatch(page, /runLocalFallback/);
   assert.match(page, /ai-chat-messages/);
   assert.match(page, /ai-suggestions-grid/);
   assert.match(page, /ai-chat-input-bar/);
   assert.match(page, /INITIAL_SUGGESTIONS/);
-  assert.match(page, /Chỉ mục Cục bộ \(Local RAG\)/);
+  assert.match(page, /Không thể kết nối máy chủ AI/);
 });
 

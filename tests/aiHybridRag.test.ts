@@ -18,7 +18,7 @@ test('AI service uses the LightRAG upload and referenced streaming APIs', () => 
   assert.doesNotMatch(source, /\/documents\/file/);
   assert.match(source, /include_references:\s*true/);
   assert.match(source, /include_chunk_content:\s*true/);
-  assert.match(source, /queryLocalLegalRag/);
+  assert.doesNotMatch(source, /queryLocalLegalRag|queryLocalFallback/);
   assert.match(source, /const controller = new AbortController\(\)/);
   assert.match(source, /trimmedBuffer\.startsWith\('\{'\)/);
   assert.match(source, /handlePayload\(JSON\.parse\(trimmedBuffer\)/);

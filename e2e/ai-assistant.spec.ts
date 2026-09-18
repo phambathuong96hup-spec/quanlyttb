@@ -1,33 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
 
-const syntheticIndex = {
-  version: 2,
-  generatedAt: '2026-09-17',
-  source: 'synthetic-review',
-  documents: [
-    {
-      id: 'qa',
-      title: 'Tài liệu QA',
-      fileName: 'qa.txt',
-      description: 'kiểm thử',
-      charLength: 100,
-    },
-  ],
-  chunks: [
-    {
-      id: 'qa-1',
-      documentId: 'qa',
-      documentTitle: 'Tài liệu QA',
-      documentDescription: 'kiểm thử',
-      fileName: 'qa.txt',
-      sectionTitle: 'Kiểm thử',
-      chunkIndex: 0,
-      text: 'Kiểm thử thiết bị QA chỉ dùng làm dữ liệu giả lập phục vụ kiểm tra phần mềm, không phải hướng dẫn kỹ thuật hay pháp lý.',
-      tokenEstimate: 40,
-    },
-  ],
-};
-
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     sessionStorage.setItem(
@@ -51,34 +23,23 @@ const sendQuestion = async (page: Page, text = 'kiểm thử thiết bị QA') =
   await page.getByRole('button', { name: 'Gửi câu hỏi', exact: true }).click();
 };
 
-test('backend 503 fallback must be labelled Local RAG and display citations', async ({ page }) => {
-  await page.route('**/query/stream', (route) => route.fulfill({ status: 503, body: 'unavailable' }));
-  await page.route('**/rag/legal-knowledge.json', (route) => route.fulfill({ json: syntheticIndex }));
-
-  await page.goto('/ai-assistant');
-  await sendQuestion(page);
-
-  const assistantMessage = page.locator('.ai-message-row.assistant').last();
-  await expect(assistantMessage).toContainText('Tài liệu QA');
-  await expect(assistantMessage.locator('.ai-source-tag')).toHaveText('Local RAG');
-  await expect(page.locator('.ai-status-indicator')).toContainText('Local RAG');
-});
-
-test('first offline query must recover after network returns', async ({ page }) => {
-  await page.route('**/query/stream', (route) => route.abort());
+for (const failure of ['http', 'network']) test('cloud failure '+failure+' reports error without local retrieval and allows retry', async ({page}) => {
   let available = false;
-  await page.route('**/rag/legal-knowledge.json', (route) => (available ? route.fulfill({ json: syntheticIndex }) : route.abort()));
-
+  let localRequests = 0;
+  await page.route('**/rag/legal-knowledge.json', route => {localRequests++; return route.abort();});
+  await page.route('**/query/stream', route => available
+    ? route.fulfill({contentType:'application/x-ndjson',body:JSON.stringify({response:'Máy chủ đã trả lời thành công',answer_source:'llm'})+'\n'})
+    : failure === 'http' ? route.fulfill({status:503,body:'unavailable'}) : route.abort());
   await page.goto('/ai-assistant');
   await sendQuestion(page);
-
-  await expect(page.locator('.ai-message-row.assistant').last()).toContainText('Không thể hoàn tất tra cứu');
-
+  await expect(page.locator('.ai-message-row.assistant').last()).toContainText('Không thể kết nối máy chủ AI');
+  await expect(page.locator('.ai-chat-textarea')).toBeEnabled();
+  expect(localRequests).toBe(0);
+  await expect(page.locator('.ai-chat-messages')).not.toContainText('Local RAG');
   available = true;
   await sendQuestion(page);
-
-  await expect(page.locator('.ai-message-row.assistant').last()).toContainText('Tài liệu QA');
-  await expect(page.locator('.ai-message-row.assistant').last().locator('.ai-source-tag')).toHaveText('Local RAG');
+  await expect(page.locator('.ai-message-row.assistant').last()).toContainText('Máy chủ đã trả lời thành công');
+  await expect(page.locator('.ai-message-row.assistant').last().locator('.ai-source-tag')).toHaveText('Cloud LLM');
 });
 
 test('retrieval-only backend response must not be labelled LLM', async ({ page }) => {

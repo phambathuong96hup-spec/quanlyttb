@@ -14,6 +14,8 @@ export default defineConfig({
   },
   webServer: {
     command: 'npm run dev -- --host 127.0.0.1 --port 5194',
+    // Tests intercept AI requests; do not depend on ignored local env files or real services.
+    env: { VITE_AI_API_URL: 'https://ai-e2e.invalid', VITE_AI_API_KEY: '' },
     url: 'http://127.0.0.1:5194/login',
     reuseExistingServer: false,
     timeout: 120_000,

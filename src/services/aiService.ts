@@ -1,9 +1,8 @@
 /**
  * AI Service — LightRAG API Client
- * Kết nối tới LightRAG server trên HuggingFace Spaces, có fallback RAG nội bộ.
+ * Kết nối tới LightRAG server trên HuggingFace Spaces, chỉ truy vấn máy chủ AI.
  */
 
-import { queryLocalLegalRag } from './legalRagService.ts';
 import {
   formatReferencesForDisplay,
   normalizeCitationReference,
@@ -61,7 +60,7 @@ interface QueryResponse {
   references?: QueryReference[];
 }
 
-export type AnswerSource = 'cloud_llm' | 'cloud_retrieval' | 'local_rag' | 'neutral';
+export type AnswerSource = 'cloud_llm' | 'cloud_retrieval' | 'neutral';
 
 export interface StreamMeta {
   source?: AnswerSource;
@@ -123,13 +122,6 @@ const requireAIBaseUrl = () => {
   return AI_BASE_URL;
 };
 
-const hasNoRemoteContext = (response: string) => {
-  const normalized = response.trim().toLowerCase();
-  return normalized.includes('no relevant context found')
-    || normalized.includes('không tìm thấy ngữ cảnh phù hợp')
-    || normalized.includes('khong tim thay ngu canh phu hop');
-};
-
 const getStatusCount = (
   counts: Record<string, number> | undefined,
   key: string,
@@ -152,21 +144,6 @@ const hasRemoteIndexedDocuments = async () => {
   } finally {
     clearTimeout(timeout);
   }
-};
-
-const queryLocalFallback = async (
-  query: string,
-  onChunk: (text: string, meta?: StreamMeta) => void,
-  onDone: (meta?: StreamMeta) => void,
-) => {
-  const answer = await queryLocalLegalRag(query);
-  const references: NormalizedCitation[] = answer.references.map((r, i) => normalizeCitationReference(r, i));
-  const meta: StreamMeta = {
-    source: 'local_rag',
-    references,
-  };
-  onChunk(answer.response, meta);
-  onDone(meta);
 };
 
 // ==================== API Functions ====================
@@ -196,43 +173,18 @@ export const checkAIHealth = async (): Promise<boolean> => {
  * Gửi câu hỏi tới LightRAG và nhận câu trả lời (non-streaming)
  */
 export const queryAI = async (request: QueryRequest): Promise<string> => {
-  if (!AI_BASE_URL) {
-    const answer = await queryLocalLegalRag(request.query);
-    return answer.response;
-  }
-
+  const baseUrl = requireAIBaseUrl();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 45_000);
   try {
-    const res = await fetch(`${AI_BASE_URL}/query`, {
-      method: 'POST',
-      headers: aiHeaders(),
-      body: JSON.stringify({
-        query: request.query,
-        mode: request.mode || 'hybrid',
-        stream: false,
-        only_need_context: false,
-        response_type: 'Multiple Paragraphs',
-        top_k: 60,
-        include_references: true,
-        include_chunk_content: true,
-        conversation_history: request.conversation_history || [],
-      }),
+    const res = await fetch(baseUrl + '/query', {
+      method: 'POST', headers: aiHeaders(), signal: controller.signal,
+      body: JSON.stringify({...request, stream: false, include_references: true, include_chunk_content: true}),
     });
-
-    if (!res.ok) {
-      const answer = await queryLocalLegalRag(request.query);
-      return answer.response;
-    }
-
+    if (!res.ok) throw new Error('Không thể kết nối máy chủ AI. Vui lòng thử lại.');
     const data: QueryResponse = await res.json();
-    if (hasNoRemoteContext(data.response)) {
-      const answer = await queryLocalLegalRag(request.query);
-      return answer.response;
-    }
-    return `${data.response}${formatReferencesForDisplay(data.references || [], request.query)}`;
-  } catch {
-    const answer = await queryLocalLegalRag(request.query);
-    return answer.response;
-  }
+    return data.response + formatReferencesForDisplay(data.references || [], request.query);
+  } finally { clearTimeout(timeout); }
 };
 
 /**
@@ -247,7 +199,7 @@ export const queryAIStream = async (
 ): Promise<void> => {
   if (options?.signal?.aborted) return;
   if (!AI_BASE_URL) {
-    await queryLocalFallback(request.query, onChunk, onDone);
+    onError(new Error('Dịch vụ AI chưa được cấu hình.'));
     return;
   }
 
@@ -262,8 +214,6 @@ export const queryAIStream = async (
   let llmError: string | undefined;
   const references: NormalizedCitation[] = [];
   let buffer = '';
-  let remoteResponse = '';
-  let shouldUseLocalFallback = false;
   let hasEmittedRemoteResponse = false;
 
   try {
@@ -317,11 +267,6 @@ export const queryAIStream = async (
         llmError = payload.llm_error;
       }
       if (payload.response) {
-        remoteResponse += payload.response;
-        if (hasNoRemoteContext(payload.response)) {
-          shouldUseLocalFallback = true;
-          return;
-        }
         hasEmittedRemoteResponse = true;
         onChunk(payload.response, {
           source: currentSource,
@@ -340,7 +285,6 @@ export const queryAIStream = async (
         handlePayload(JSON.parse(trimmed) as StreamPayload);
       } catch (err) {
         if (err instanceof SyntaxError) {
-          remoteResponse += line;
           hasEmittedRemoteResponse = true;
           onChunk(line, {
             source: currentSource,
@@ -385,10 +329,6 @@ export const queryAIStream = async (
 
     if (options?.signal?.aborted) return;
     if (buffer.trim()) handleLine(buffer);
-    if (shouldUseLocalFallback || hasNoRemoteContext(remoteResponse)) {
-      await queryLocalFallback(request.query, onChunk, onDone);
-      return;
-    }
     const sources = formatReferencesForDisplay(references, request.query);
     if (sources) {
       onChunk(sources, {
@@ -418,13 +358,7 @@ export const queryAIStream = async (
       );
       return;
     }
-    try {
-      await queryLocalFallback(request.query, onChunk, onDone);
-    } catch (fallbackErr) {
-      const remoteError = err instanceof Error ? err.message : String(err);
-      const localError = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
-      onError(new Error(`${remoteError}. Fallback nội bộ cũng lỗi: ${localError}`));
-    }
+    onError(new Error('Không thể kết nối máy chủ AI. Vui lòng kiểm tra kết nối và gửi lại câu hỏi.'));
   } finally {
     clearTimeout(timeout);
   }

@@ -65,7 +65,7 @@ flowchart TD
 
     subgraph AI_Layer ["Tầng Trí tuệ nhân tạo (AI / RAG)"]
         HF_Space["AI Server Backend (HuggingFace Space: pbthuong-ai.hf.space)"]
-        LocalRAG["Bộ chỉ mục JSON pháp quy & định mức (Dự phòng in-memory / JSON tải từ web khi máy chủ AI gián đoạn)"]
+        Knowledge["Chỉ mục tài liệu dùng để cập nhật backend AI"]
     end
 
     subgraph HIS_Optional ["Phân hệ Tùy chọn (HIS Sync)"]
@@ -78,7 +78,7 @@ flowchart TD
     Gateway --> AuthModule --> CrudModule --> DB_Sheets
     CrudModule --> Drive_Storage
     UI --> HF_Space
-    LocalRAG -. Tài nguyên phát triển .- HF_Space
+    Knowledge -. Tài nguyên phát triển .- HF_Space
     UI -. Optional API .- HIS_FastAPI
     LocalSnap -. Chạy demo .- Store
 ```
@@ -96,7 +96,7 @@ flowchart TD
 | **Backend Chính** | **Google Apps Script (GAS)** | API Gateway Serverless, giảm chi phí máy chủ, tích hợp sâu Google Sheets/Drive. |
 | **Cơ sở dữ liệu** | **Google Sheets API** | Cơ sở dữ liệu bảng tính đám mây, dễ dàng kiểm tra trực quan, cần cấu hình và kiểm tra quy trình sao lưu/khôi phục. |
 | **Lưu trữ file** | **Google Drive API** | Lưu trữ ảnh minh chứng hư hỏng (tối đa 8 tệp/yêu cầu), video ngắn, tệp đính kèm. |
-| **Trí tuệ nhân tạo (AI)** | **RAG BM25 + LLM Router (HuggingFace Space)** | Mô hình RAG truy xuất tài liệu pháp quy y tế kết hợp LLM tổng hợp; tích hợp giao diện Chat nội bộ và cơ chế tự động chuyển sang tra cứu chỉ mục JSON cục bộ (sẵn sàng khi chỉ mục đã tải vào bộ nhớ trình duyệt hoặc tệp tĩnh tải thành công). |
+| **Trí tuệ nhân tạo (AI)** | **RAG BM25 + LLM Router (HuggingFace Space)** | Chat trực tiếp với backend AI, hiển thị nguồn và trích dẫn. Khi kết nối lỗi, báo lỗi và cho phép gửi lại; không có tra cứu AI cục bộ trên trình duyệt. |
 | **Kiểm thử tự động** | **Node.js Test Runner + Playwright** | Kiểm tra nghiệp vụ backend, phiên đăng nhập và E2E trên Chromium desktop, Android mô phỏng và WebKit mô phỏng iPhone. Số test lấy từ kết quả chạy của phiên bản tương ứng. |
 
 ### 2. Các giải pháp kỹ thuật đột phá
@@ -110,7 +110,7 @@ flowchart TD
   - Backend lọc bỏ toàn bộ thông tin nhạy cảm (`Mã PIN`, `Mật khẩu`) trước khi trả dữ liệu về máy khách.
   - Khi người dùng bấm **Đăng xuất**, hệ thống kích hoạt hàm quét dọn bộ nhớ (`clearApiResourceCache()` & `clearAuthSession()`), xóa cache do ứng dụng quản lý, bỏ kết quả request thuộc phiên cũ và xóa dữ liệu kiểm kê tạm của tài khoản trong sessionStorage. Đây không phải cam kết xóa toàn bộ bộ nhớ trình duyệt.
 - **Dữ liệu trực tuyến:** Danh mục lấy từ Google Apps Script có xác thực. Snapshot đóng gói chỉ phục vụ demo/phát triển; không tự chuyển khi mất mạng và không phải tính năng offline cho người vận hành.
-- **Tra cứu Trí tuệ nhân tạo (AI Assistant):** Hệ thống ưu tiên truy vấn tới Máy chủ AI Đám mây. Trong trường hợp máy chủ đám mây lỗi hoặc gián đoạn, hệ thống chuyển sang tra cứu trên chỉ mục JSON pháp quy cục bộ trực tiếp trên trình duyệt. Chỉ mục này chỉ khả dụng khi đã nạp vào bộ nhớ trình duyệt hoặc tệp JSON tĩnh `legal-knowledge.json` tải về thành công; nếu mất kết nối trước khi kịp tải chỉ mục, hệ thống thông báo không thể hoàn tất và cho phép thử lại sau khi mạng phục hồi (không phải chế độ offline độc lập hoàn toàn khi chưa nạp dữ liệu).
+- **Tra cứu Trí tuệ nhân tạo (AI Assistant):** Chỉ truy vấn máy chủ AI qua Internet. Backend lỗi hoặc mất kết nối thì thông báo và cho phép gửi lại. Đã bỏ Local RAG trên trình duyệt.
 - **Độ mới dữ liệu:** Danh sách hiển thị thời điểm cập nhật và nút làm mới. Khi quay lại tab, bộ đệm quá hạn được tải lại. Nếu tải lỗi, giao diện cho biết dữ liệu có thể cũ và giữ khả năng thử lại.
 - **Điện thoại:** Thanh điều hướng dưới, danh sách thiết bị dạng thẻ, thống kê hai cột, bộ lọc thu gọn, vùng bấm tối thiểu 44px cho tác vụ chính; hộp thoại hỗ trợ Escape và quản lý focus.
 
@@ -241,7 +241,7 @@ Hợp nhất hai luồng nghiệp vụ phát sinh nhiều nhất tại bệnh vi
   - Thông tư 05/2022/TT-BYT và Thông tư 19/2021/TT-BYT (Quy định chi tiết và mẫu văn bản TTBYT).
   - Quyết định 7115/QĐ-BYT (Quy trình thanh kiểm tra TTBYT).
   - Tài liệu định mức kỹ thuật năm 2026.
-- **Khả năng giải đáp:** Nhân viên y tế có thể hỏi đáp tự nhiên bằng tiếng Việt: *"Máy siêu âm 4D phải kiểm định bao lâu một lần?", "Quy trình lập hồ sơ thanh lý máy X-quang hỏng?", "Định mức găng tay vô khuẩn khoa Ngoại năm 2026 là bao nhiêu?"* – Chất lượng câu trả lời và trích dẫn phụ thuộc backend AI và dữ liệu được lập chỉ mục. Người phụ trách đối chiếu nguồn gốc, ngày hiệu lực và phạm vi áp dụng; giao diện hỗ trợ tự động chuyển làn tra cứu cục bộ (In-Browser RAG) khi máy chủ AI ngoại tuyến.
+- **Khả năng giải đáp:** Nhân viên y tế có thể hỏi đáp tự nhiên bằng tiếng Việt: *"Máy siêu âm 4D phải kiểm định bao lâu một lần?", "Quy trình lập hồ sơ thanh lý máy X-quang hỏng?", "Định mức găng tay vô khuẩn khoa Ngoại năm 2026 là bao nhiêu?"* – Chất lượng câu trả lời và trích dẫn phụ thuộc backend AI và dữ liệu được lập chỉ mục. Người phụ trách đối chiếu nguồn gốc, ngày hiệu lực và phạm vi áp dụng; giao diện báo lỗi và cho phép thử lại khi máy chủ AI không khả dụng.
 
 ### 10. Phân hệ Theo dõi Nhiệt độ/Độ ẩm GSP (GspLog)
 - Theo dõi điều kiện bảo quản thuốc và hóa chất xét nghiệm tại kho dược và các tủ lạnh chuyên dụng theo chuẩn Thực hành tốt bảo quản thuốc (GSP).
