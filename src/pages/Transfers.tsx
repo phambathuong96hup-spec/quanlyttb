@@ -12,6 +12,7 @@ import {
   cancelTransfer,
   generateRequestId,
   type TransferData,
+  type DeviceData,
 } from '../services/api';
 import { useDevices } from '../hooks/useDevices';
 import { useTransfers } from '../hooks/useTransfers';
@@ -20,7 +21,7 @@ import { exportCsv } from '../utils/exportCsv';
 import { buildTransferRecommendations, getTransferStockGuardViolation } from '../utils/transferRecommendations';
 import { stripEvidenceLinks } from '../utils/evidenceUtils';
 import { EvidenceLinks } from '../components/EvidenceLinks';
-import { Html5Qrcode } from 'html5-qrcode';
+import { QrScannerDialog } from '../components/qr/QrScannerDialog';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import './Transfers.css';
@@ -46,10 +47,7 @@ const Transfers: React.FC<TransfersProps> = ({ defaultTab = 'requests' }) => {
   const [toDepartment, setToDepartment] = useState('');
   const [reason, setReason] = useState('');
   const [message, setMessage] = useState('');
-  const [showScanner, setShowScanner] = useState(false);
-  const [scanResult, setScanResult] = useState('');
-  const scannerRef = useRef<Html5Qrcode | null>(null);
-  const scannerContainerId = 'qr-scanner-region';
+  const [isScannerOpen, setIsScannerOpen] = useState(false);
 
   // File states
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -108,24 +106,7 @@ const Transfers: React.FC<TransfersProps> = ({ defaultTab = 'requests' }) => {
     return Array.from(new Set(devices.map(d => d.department).filter(Boolean))).sort();
   }, [devices]);
 
-  // ===== QR Scanner Logic =====
-  const stopScanner = useCallback(async () => {
-    try {
-      if (scannerRef.current) {
-        const state = scannerRef.current.getState();
-        if (state === 2 /* SCANNING */) {
-          await scannerRef.current.stop();
-        }
-        scannerRef.current.clear();
-        scannerRef.current = null;
-      }
-    } catch { /* ignore */ }
-  }, []);
-
-  const transferableDevices = useMemo(() => {
-    // Show all devices — backend validates ownership/permission on submit
-    return devices;
-  }, [devices]);
+  const transferableDevices = useMemo(() => devices, [devices]);
   const deviceTypes = useMemo(() => {
     return Array.from(new Set(devices.map(device => String(device.name || '').trim()).filter(Boolean)))
       .sort((first, second) => first.localeCompare(second, 'vi'));
@@ -135,55 +116,19 @@ const Transfers: React.FC<TransfersProps> = ({ defaultTab = 'requests' }) => {
       .sort((first, second) => first.localeCompare(second, 'vi'));
   }, [deviceTypes]);
 
-  const startScanner = useCallback(async () => {
-    setScanResult('');
-    setShowScanner(true);
-    // Wait for DOM element to render
-    await new Promise(r => setTimeout(r, 350));
-    try {
-      const html5QrCode = new Html5Qrcode(scannerContainerId);
-      scannerRef.current = html5QrCode;
-      await html5QrCode.start(
-        { facingMode: 'environment' },
-        { fps: 10, qrbox: { width: 250, height: 250 } },
-        (decodedText) => {
-          // Found a code — match to device
-          const cleanCode = decodedText.trim().toLowerCase();
-          const found = transferableDevices.find(d =>
-            d.id.toLowerCase() === cleanCode ||
-            d.id.toLowerCase().includes(cleanCode) ||
-            (d.serial && String(d.serial).toLowerCase().includes(cleanCode))
-          );
-          if (found) {
-            setDeviceId(found.id);
-            setScanResult(`✅ Đã tìm thấy: ${found.id} - ${found.name}`);
-          } else {
-            setScanResult(`⚠️ Không tìm thấy thiết bị với mã: ${decodedText}`);
-          }
-          // Stop after first successful read
-          html5QrCode.stop().then(() => html5QrCode.clear()).catch(() => {});
-          scannerRef.current = null;
-          setTimeout(() => setShowScanner(false), 1500);
-        },
-        () => { /* ignore scan failures (no code in frame) */ }
-      );
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      setScanResult(`❌ Không thể mở camera: ${message}`);
-      setTimeout(() => setShowScanner(false), 2500);
+  // ===== QR Scanner Logic =====
+  const handleDeviceSelectFromScanner = useCallback((device: DeviceData) => {
+    if (transferType === 'Trả') {
+      setDeviceId(device.id);
+      if (device.department) {
+        setToDepartment(device.department);
+      }
+      toast.success(`Đã chọn thiết bị hoàn trả: ${device.id} - ${device.name}`);
+    } else {
+      setDeviceType(device.name || '');
+      toast.success(`Đã chọn loại trang thiết bị: ${device.name} (${device.id})`);
     }
-  }, [transferableDevices]);
-
-  const closeScanner = useCallback(async () => {
-    await stopScanner();
-    setShowScanner(false);
-    setScanResult('');
-  }, [stopScanner]);
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => { stopScanner(); };
-  }, [stopScanner]);
+  }, [toast, transferType]);
   // ===== End QR Scanner =====
 
   const pendingRequests = reversedTransfers.filter(t => ['PENDING_ASSIGN', 'PENDING_RECEIVE'].includes(t.status) && (isAdmin || t.toDepartment === userDepartment || t.requestedBy === username || t.fromDepartment === userDepartment));
@@ -521,55 +466,31 @@ const Transfers: React.FC<TransfersProps> = ({ defaultTab = 'requests' }) => {
                 <Repeat2 size={28} style={{ color: 'white' }} />
               </div>
               <div className="transfer-summary-info request-summary-content">
-                <h3>Yêu cầu mượn trang thiết bị</h3>
-                <p>Chọn loại trang thiết bị cần mượn; Admin quyết định máy cụ thể và khoa xuất.</p>
+                <h3>{transferType === 'Trả' ? 'Yêu cầu hoàn trả trang thiết bị' : 'Yêu cầu mượn trang thiết bị'}</h3>
+                <p>{transferType === 'Trả' ? 'Chọn hoặc quét thiết bị cần hoàn trả về khoa quản lý ban đầu.' : 'Chọn loại trang thiết bị cần mượn; Admin quyết định máy cụ thể và khoa xuất.'}</p>
               </div>
             </div>
 
             <form className="form-section request-form" onSubmit={submitTransfer}>
               <div className="request-field">
-                <label className="input-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  {transferType === 'Trả' ? 'Thiết bị hoàn trả' : 'Mượn loại trang thiết bị gì'}
-                  {transferType === 'Trả' && (
-                    <Button className="request-qr-button" variant="secondary" size="sm" type="button" style={{ padding: '2px 8px', fontSize: '0.8rem' }} onClick={startScanner}>
-                      <Camera size={14} style={{ marginRight: '4px' }} /> Quét QR/Barcode
-                    </Button>
-                  )}
-                </label>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px', flexWrap: 'wrap', gap: '8px' }}>
+                  <label className="input-label" style={{ margin: 0 }}>
+                    {transferType === 'Trả' ? 'Thiết bị hoàn trả' : 'Mượn loại trang thiết bị gì'}
+                  </label>
+                  <Button
+                    className="request-qr-button"
+                    variant="secondary"
+                    size="sm"
+                    type="button"
+                    style={{ padding: '3px 10px', fontSize: '0.82rem' }}
+                    onClick={event => { event.currentTarget.focus(); setIsScannerOpen(true); }}
+                    icon={<Camera size={14} />}
+                  >
+                    Quét mã thiết bị
+                  </Button>
+                </div>
 
-                {/* ===== QR Scanner Modal ===== */}
-                {showScanner && (
-                  <div style={{
-                    position: 'fixed', inset: 0, zIndex: 9999,
-                    background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  }} onClick={closeScanner}>
-                    <div style={{
-                      background: 'var(--surface, #fff)', borderRadius: '16px', padding: '20px',
-                      width: '90%', maxWidth: '420px', position: 'relative',
-                    }} onClick={e => e.stopPropagation()}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                        <strong style={{ fontSize: '1.05rem' }}>📷 Quét mã QR / barcode</strong>
-                        <button onClick={closeScanner} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px' }}>
-                          <X size={20} />
-                        </button>
-                      </div>
-                      <div id={scannerContainerId} style={{ width: '100%', minHeight: '280px', borderRadius: '8px', overflow: 'hidden' }} />
-                      {scanResult && (
-                        <div style={{
-                          marginTop: '12px', padding: '10px', borderRadius: '8px',
-                          background: scanResult.startsWith('✅') ? '#d1fae5' : scanResult.startsWith('⚠') ? '#fef3c7' : '#fee2e2',
-                          fontWeight: 600, textAlign: 'center', fontSize: '0.9rem',
-                        }}>
-                          {scanResult}
-                        </div>
-                      )}
-                      <p style={{ textAlign: 'center', marginTop: '10px', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
-                        Hướng camera vào mã QR hoặc Barcode trên thiết bị
-                      </p>
-                    </div>
-                  </div>
-                )}
-                {/* ===== End Scanner Modal ===== */}
+
                 {transferType === 'Trả' ? (
                   <select className="filter-select request-select" value={deviceId} onChange={e => setDeviceId(e.target.value)} required>
                     <option value="" disabled>-- Chọn thiết bị --</option>
@@ -883,6 +804,18 @@ const Transfers: React.FC<TransfersProps> = ({ defaultTab = 'requests' }) => {
           </div>
         )}
       </Modal>
+
+      {isScannerOpen && <QrScannerDialog
+        isOpen={isScannerOpen}
+        onClose={() => setIsScannerOpen(false)}
+        mode="transfer"
+        devices={devices}
+        title="Quét thiết bị luân chuyển"
+        subtitle={transferType === 'Trả' ? 'Hoàn trả thiết bị' : 'Quét để chọn loại máy; admin quyết định máy cụ thể'}
+        transferType={transferType}
+        userDepartment={userDepartment}
+        onSelectDevice={handleDeviceSelectFromScanner}
+      />}
     </div>
   );
 };

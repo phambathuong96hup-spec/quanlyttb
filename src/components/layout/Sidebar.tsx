@@ -12,6 +12,7 @@ import {
   BotMessageSquare,
   QrCode,
   BookOpen,
+  Shield,
 } from 'lucide-react';
 import { useAuth } from '../../authContext';
 import './Sidebar.css';
@@ -23,7 +24,7 @@ interface SidebarProps {
 }
 
 const Sidebar: React.FC<SidebarProps> = ({ isOpen, isMobile, onNavigate }) => {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, isAdmin } = useAuth();
   const navigate = useNavigate();
 
   const publicItems = [
@@ -140,6 +141,26 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, isMobile, onNavigate }) => {
             </NavLink>
           );
         })}
+
+        {/* Label section: Admin */}
+        {isAdmin && (
+          <>
+            {isOpen && (
+              <div className="sidebar-section-label" style={{ marginTop: '8px' }}>
+                Hệ thống
+              </div>
+            )}
+            <NavLink
+              to="/admin"
+              className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+              title={!isOpen ? 'Quản trị & Phân khoa' : undefined}
+              onClick={(e) => handlePrivateClick(e, '/admin', true)}
+            >
+              <Shield size={20} className="nav-icon" />
+              <span className="nav-text">Quản trị &amp; Phân khoa</span>
+            </NavLink>
+          </>
+        )}
       </nav>
 
       {/* Footer: trạng thái đăng nhập */}

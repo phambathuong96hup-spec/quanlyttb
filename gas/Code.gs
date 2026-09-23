@@ -10,8 +10,11 @@ const SHEETS = {
   documents: 'Documents',
   logs: 'ActivityLogs',
   pendingSync: 'PendingSync',
-  idempotency: 'IdempotencyKeys'
+  idempotency: 'IdempotencyKeys',
+  emailOutbox: 'EmailOutbox'
 };
+
+var SCHEMA_VERSION = '2026.09.21.1';
 
 const LOG_HEADERS = [
   'Thời gian',
@@ -44,6 +47,22 @@ const IDEMPOTENCY_HEADERS = [
   'PayloadHash',
   'Status',
   'ResponseJson',
+  'CreatedAt',
+  'UpdatedAt'
+];
+
+const EMAIL_OUTBOX_HEADERS = [
+  'Id',
+  'TicketId',
+  'RequestId',
+  'Event',
+  'Recipient',
+  'Subject',
+  'Body',
+  'Status',
+  'Attempts',
+  'NextRetryAt',
+  'LastError',
   'CreatedAt',
   'UpdatedAt'
 ];
@@ -477,8 +496,49 @@ function handleIdempotentAction_(actionName, payload, actor, actionCallback) {
 function route_(action, payload) {
   if (['listFormTemplates','listSubmittedForms','downloadFormFile','uploadFormTemplate','submitForm','removeFormTemplate'].includes(action)) return formLibraryRoute_(action, payload || {});
   if (action === 'login') return login_(payload);
-  setupSheets();
-  let actor;
+
+  const KNOWN_ACTIONS = [
+    'getDevices', 'getDepartments', 'getUsers', 'getRepairs', 'getTransfers',
+    'getOperationalState', 'getInventoryRuns', 'getGSP', 'addDevice', 'editDevice',
+    'importSnapshotDevices', 'reconcilePendingSyncs', 'reportRepair', 'approveRepair',
+    'updateDocStatus', 'addDocument', 'renewDocument', 'createTransfer',
+    'createTransferTypeRequest', 'assignTransferDevice', 'receiveTransfer',
+    'rejectTransfer', 'cancelTransfer', 'transferDevice', 'addGSP',
+    'saveWorkflowOverride', 'addCostEntry', 'deleteCostEntry', 'saveInventoryRun',
+    'deleteInventoryRun', 'editUser', 'addUser', 'migrateSchema',
+    'processEmailOutbox', 'setupEmailOutboxTrigger'
+  ];
+
+  if (!KNOWN_ACTIONS.includes(action)) {
+    return { success: false, message: 'Action không hợp lệ: ' + action };
+  }
+
+  const ADMIN_ACTIONS = [
+    'getUsers', 'addDevice', 'editDevice', 'importSnapshotDevices', 'reconcilePendingSyncs',
+    'addCostEntry', 'deleteCostEntry', 'addUser', 'migrateSchema', 'processEmailOutbox',
+    'setupEmailOutboxTrigger'
+  ];
+
+  let actor = null;
+  if (ADMIN_ACTIONS.includes(action)) {
+    actor = requireAdmin_(payload);
+    if (!actor) return authError_('Chỉ Admin có quyền thực hiện thao tác này.');
+  } else {
+    actor = requireAuthenticated_(payload);
+    if (!actor) return authError_();
+  }
+
+  if (action !== 'migrateSchema') {
+    const schemaOk = ensureSchemaVersion_();
+    if (!schemaOk) {
+      return {
+        success: false,
+        canRetry: true,
+        error: 'SCHEMA_NOT_READY',
+        message: 'Hệ thống đang đồng bộ cấu trúc bảng dữ liệu hoặc chưa lấy được khóa. Vui lòng thử lại sau.'
+      };
+    }
+  }
   switch (action) {
     case 'getDevices':
       actor = requireAuthenticated_(payload);
@@ -634,6 +694,31 @@ function route_(action, payload) {
       actor = requireAuthenticated_(payload);
       if (!actor) return authError_();
       return editUser_(payload);
+    case 'addUser':
+      actor = requireAdmin_(payload);
+      if (!actor) return authError_('Chỉ Admin được thêm người dùng mới.');
+      return addUser_(payload, actor);
+    case 'migrateSchema':
+      actor = requireAdmin_(payload);
+      if (!actor) return authError_('Chỉ Admin được chạy migration schema.');
+      const migrated = ensureSchemaVersion_(true);
+      if (!migrated) {
+        return {
+          success: false,
+          canRetry: true,
+          error: 'LOCK_DENIED',
+          message: 'Hệ thống đang bận chạy migration hoặc không lấy được khóa. Vui lòng thử lại sau.'
+        };
+      }
+      return { success: true, version: SCHEMA_VERSION, message: 'Đã hoàn tất migration schema lên phiên bản ' + SCHEMA_VERSION };
+    case 'processEmailOutbox':
+      actor = requireAdmin_(payload);
+      if (!actor) return authError_('Chỉ Admin được kích hoạt xử lý hàng đợi email.');
+      return processEmailOutbox_(payload.limit);
+    case 'setupEmailOutboxTrigger':
+      actor = requireAdmin_(payload);
+      if (!actor) return authError_('Chỉ Admin được cài đặt trigger hàng đợi email.');
+      return setupEmailOutboxTrigger_();
     default:
       return { success: false, message: 'Action không hợp lệ: ' + action };
   }
@@ -695,15 +780,34 @@ function login_(payload) {
   return { success: true, user: sanitizeUser_(user), token: session.token, expiresAt: session.expiresAt };
 }
 
+function userFieldAliases_() {
+  return {
+    username: ['Tên đăng nhập', 'Ten dang nhap', 'Username', 'username', 'Tài khoản', 'Tai khoan', 'Account', 'account'],
+    pin: ['Mã PIN', 'Ma PIN', 'PIN', 'pin', 'Mật khẩu', 'Mat khau', 'Password', 'password', 'Mã pin', 'MÃ PIN'],
+    role: ['Quyền hạn', 'Quyen han', 'Quyền', 'Quyen', 'Role', 'role'],
+    fullName: ['Họ và Tên', 'Họ và tên', 'Ho va Ten', 'Ho va ten', 'Name', 'name', 'Họ tên', 'Ho ten'],
+    email: ['Email', 'email'],
+    department: ['Khoa/Phòng', 'Khoa/Phong', 'Khoa/ Phòng', 'Khoa', 'khoa', 'Department', 'department', 'Nơi công tác', 'Noi cong tac'],
+    status: ['Trạng thái', 'Trang thai', 'Status', 'status']
+  };
+}
+
+var USER_FIELD_ALIASES = userFieldAliases_();
+
 function findLoginUser_(users, username) {
+  const aliases = (typeof userFieldAliases_ === 'function') ? userFieldAliases_() : (typeof USER_FIELD_ALIASES !== 'undefined' ? USER_FIELD_ALIASES : null);
+  const usernameKeys = aliases ? aliases.username : ['Tên đăng nhập', 'Ten dang nhap', 'Username', 'username', 'Tài khoản', 'Tai khoan', 'Account', 'account'];
+  const emailKeys = aliases ? aliases.email : ['Email', 'email'];
   return users.find(u => {
-    const account = getUserField_(u, ['Tên đăng nhập', 'Ten dang nhap', 'Username', 'Tài khoản', 'Tai khoan', 'username']);
-    const email = getUserField_(u, ['Email', 'email']);
+    const account = getUserField_(u, usernameKeys);
+    const email = getUserField_(u, emailKeys);
     return normalize_(account) === normalize_(username) || normalize_(email) === normalize_(username);
   });
 }
 
 function pinFieldKeys_() {
+  if (typeof userFieldAliases_ === 'function') return userFieldAliases_().pin;
+  if (typeof USER_FIELD_ALIASES !== 'undefined' && USER_FIELD_ALIASES && USER_FIELD_ALIASES.pin) return USER_FIELD_ALIASES.pin;
   return ['Mã PIN', 'Ma PIN', 'PIN', 'pin', 'Mật khẩu', 'Mat khau', 'Password', 'password', 'Mã pin', 'MÃ PIN'];
 }
 
@@ -952,6 +1056,532 @@ function setupSheets() {
   ensureSheet_(SHEETS.logs, LOG_HEADERS);
   ensureSheet_(SHEETS.pendingSync, PENDING_SYNC_HEADERS);
   ensureSheet_(SHEETS.idempotency, IDEMPOTENCY_HEADERS);
+  ensureSheet_(SHEETS.emailOutbox, EMAIL_OUTBOX_HEADERS);
+}
+
+function ensureSchemaVersion_(force) {
+  const SCRIPT_SCHEMA_VERSION = SCHEMA_VERSION;
+  let sheetId = '';
+  try {
+    const spreadsheet = deviceSpreadsheet_();
+    sheetId = (spreadsheet && spreadsheet.getId) ? spreadsheet.getId() : '';
+  } catch (_) {}
+  if (!sheetId) {
+    sheetId = typeof DEVICE_SPREADSHEET_ID !== 'undefined' ? DEVICE_SPREADSHEET_ID : 'default';
+  }
+  const markerKey = 'SCHEMA_VERSION_' + sheetId;
+
+  if (!force) {
+    try {
+      if (typeof CacheService !== 'undefined' && CacheService.getScriptCache) {
+        const cache = CacheService.getScriptCache();
+        const cachedVersion = cache ? cache.get(markerKey) : null;
+        if (cachedVersion === SCRIPT_SCHEMA_VERSION) {
+          return true;
+        }
+      }
+    } catch (_) {}
+
+    try {
+      if (typeof PropertiesService !== 'undefined' && PropertiesService.getScriptProperties) {
+        const props = PropertiesService.getScriptProperties();
+        const storedVersion = props ? props.getProperty(markerKey) : null;
+        if (storedVersion === SCRIPT_SCHEMA_VERSION) {
+          try {
+            if (typeof CacheService !== 'undefined' && CacheService.getScriptCache) {
+              const cache = CacheService.getScriptCache();
+              if (cache) cache.put(markerKey, SCRIPT_SCHEMA_VERSION, 21600);
+            }
+          } catch (_) {}
+          return true;
+        }
+      }
+    } catch (propErr) {
+      console.warn('Không thể đọc schema marker từ ScriptProperties:', propErr);
+    }
+  }
+
+  let lock = null;
+  let hasLock = false;
+  if (typeof LockService !== 'undefined' && LockService.getScriptLock) {
+    lock = LockService.getScriptLock();
+    try {
+      hasLock = lock.tryLock(15000);
+    } catch (lockErr) {
+      console.warn('Lỗi khi tryLock cho migration schema:', lockErr);
+      hasLock = false;
+    }
+  }
+
+  if (lock && !hasLock) {
+    console.warn('ensureSchemaVersion_: Không lấy được khóa migration schema, dừng để tránh chạy đồng thời.');
+    return false;
+  }
+
+  try {
+    if (!force && typeof PropertiesService !== 'undefined' && PropertiesService.getScriptProperties) {
+      const props = PropertiesService.getScriptProperties();
+      const storedVersion = props ? props.getProperty(markerKey) : null;
+      if (storedVersion === SCRIPT_SCHEMA_VERSION) {
+        try {
+          if (typeof CacheService !== 'undefined' && CacheService.getScriptCache) {
+            const cache = CacheService.getScriptCache();
+            if (cache) cache.put(markerKey, SCRIPT_SCHEMA_VERSION, 21600);
+          }
+        } catch (_) {}
+        return true;
+      }
+    }
+
+    setupSheets();
+
+    try {
+      if (typeof PropertiesService !== 'undefined' && PropertiesService.getScriptProperties) {
+        const props = PropertiesService.getScriptProperties();
+        if (props) props.setProperty(markerKey, SCRIPT_SCHEMA_VERSION);
+      }
+      if (typeof CacheService !== 'undefined' && CacheService.getScriptCache) {
+        const cache = CacheService.getScriptCache();
+        if (cache) cache.put(markerKey, SCRIPT_SCHEMA_VERSION, 21600);
+      }
+    } catch (saveErr) {
+      console.error('Không thể lưu schema marker mới:', saveErr);
+    }
+    return true;
+  } finally {
+    if (lock && hasLock) {
+      try { lock.releaseLock(); } catch (_) {}
+    }
+  }
+}
+
+function findDeviceWithRowIndex_(deviceId) {
+  const id = String(deviceId || '').trim();
+  if (!id) return { rowIndex: -1, device: null };
+  const sheet = deviceSpreadsheet_().getSheetByName(SHEETS.devices);
+  if (!sheet) return { rowIndex: -1, device: null };
+  const values = sheet.getDataRange().getDisplayValues();
+  if (values.length < 2) return { rowIndex: -1, device: null };
+  const headers = values[0];
+  const idIndex = headers.indexOf('id');
+  const serialIndex = headers.indexOf('Seri Máy');
+  for (let i = 1; i < values.length; i += 1) {
+    const row = values[i];
+    if ((idIndex >= 0 && String(row[idIndex]).trim() === id) || 
+        (serialIndex >= 0 && String(row[serialIndex]).trim() === id)) {
+      const rowIndex = i + 1;
+      const device = rowObjectFromValues_(headers, row);
+      return { rowIndex: rowIndex, device: device };
+    }
+  }
+  return { rowIndex: -1, device: null };
+}
+
+function enqueueEmailNotification_(task) {
+  const rawReqId = String(task.requestId || '').trim();
+  const cleanReqId = rawReqId.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const ticketId = String(task.ticketId || '').trim();
+  const event = String(task.event || 'reportRepairNotification').trim();
+  const taskId = cleanReqId
+    ? ('EML-' + cleanReqId + '-' + event)
+    : ('EML-' + (ticketId ? ticketId.replace(/[^a-zA-Z0-9_-]/g, '_') + '-' : '') + event + '-' + (typeof Utilities !== 'undefined' && Utilities.getUuid ? Utilities.getUuid().slice(0, 8) : Math.random().toString(36).slice(2, 10)));
+
+  let lock = null;
+  let hasLock = false;
+  if (typeof LockService !== 'undefined' && LockService.getScriptLock) {
+    lock = LockService.getScriptLock();
+    try {
+      hasLock = lock.tryLock(10000);
+    } catch (lockErr) {
+      console.warn('Lỗi khi tryLock cho enqueue email:', lockErr);
+      hasLock = false;
+    }
+  }
+
+  if (lock && !hasLock) {
+    console.warn('enqueueEmailNotification_: Không lấy được khóa để enqueue email, huỷ thao tác để tránh ghi ngoài kiểm soát.');
+    return { success: false, queued: false, error: 'LOCK_TIMEOUT' };
+  }
+
+  try {
+    let sheet = deviceSpreadsheet_().getSheetByName(SHEETS.emailOutbox);
+    if (!sheet) {
+      ensureSheet_(SHEETS.emailOutbox, EMAIL_OUTBOX_HEADERS);
+      sheet = deviceSpreadsheet_().getSheetByName(SHEETS.emailOutbox);
+    }
+    const values = sheet ? sheet.getDataRange().getDisplayValues() : [];
+    if (values.length >= 2) {
+      const headers = values[0];
+      const idIdx = headers.indexOf('Id');
+      const reqIdx = headers.indexOf('RequestId');
+      const eventIdx = headers.indexOf('Event');
+
+      for (let i = 1; i < values.length; i++) {
+        const row = values[i];
+        if (idIdx >= 0 && String(row[idIdx]).trim() === taskId) {
+          return { success: true, queued: true, deduplicated: true, taskId: taskId };
+        }
+        if (rawReqId && reqIdx >= 0 && String(row[reqIdx]).trim() === rawReqId && eventIdx >= 0 && String(row[eventIdx]).trim() === event) {
+          return { success: true, queued: true, deduplicated: true, taskId: row[idIdx] || taskId };
+        }
+      }
+    }
+
+    const now = new Date();
+    appendObject_(SHEETS.emailOutbox, {
+      Id: taskId,
+      TicketId: ticketId,
+      RequestId: rawReqId,
+      Event: event,
+      Recipient: Array.isArray(task.recipient) ? task.recipient.join(', ') : String(task.recipient || ''),
+      Subject: String(task.subject || ''),
+      Body: String(task.body || ''),
+      Status: 'PENDING',
+      Attempts: 0,
+      NextRetryAt: now,
+      LastError: '',
+      CreatedAt: now,
+      UpdatedAt: now
+    });
+    return { success: true, queued: true, taskId: taskId };
+  } catch (err) {
+    console.error('enqueueEmailNotification_ failed:', err);
+    return { success: false, queued: false, error: err.message || String(err) };
+  } finally {
+    if (lock && hasLock) {
+      try { lock.releaseLock(); } catch (_) {}
+    }
+  }
+}
+
+function processEmailOutbox_(batchLimit) {
+  const limit = Number(batchLimit) > 0 ? Number(batchLimit) : 10;
+  const PROCESSING_LEASE_MS = 10 * 60 * 1000; // 10 phút thời hạn giữ tác vụ (lease)
+  let lock = null;
+  let hasLock = false;
+  if (typeof LockService !== 'undefined' && LockService.getScriptLock) {
+    lock = LockService.getScriptLock();
+    try {
+      hasLock = lock.tryLock(15000);
+    } catch (_) {}
+  }
+  if (lock && !hasLock) {
+    console.log('processEmailOutbox_: Không lấy được script lock, lượt chạy khác đang xử lý.');
+    return { processed: 0, skipped: true, reason: 'LOCKED' };
+  }
+
+  const tasksToProcess = [];
+  const nowTime = Date.now();
+  const runId = 'RUN-' + nowTime + '-' + (typeof Utilities !== 'undefined' && Utilities.getUuid ? Utilities.getUuid().slice(0, 8) : Math.random().toString(36).slice(2, 8));
+
+  try {
+    let sheet = deviceSpreadsheet_().getSheetByName(SHEETS.emailOutbox);
+    if (!sheet) {
+      ensureSheet_(SHEETS.emailOutbox, EMAIL_OUTBOX_HEADERS);
+      sheet = deviceSpreadsheet_().getSheetByName(SHEETS.emailOutbox);
+    }
+    const values = sheet ? sheet.getDataRange().getDisplayValues() : [];
+    if (values.length < 2) {
+      return { processed: 0, sent: 0, failed: 0 };
+    }
+    const headers = values[0];
+    const idIdx = headers.indexOf('Id');
+    const statusIdx = headers.indexOf('Status');
+    const attemptsIdx = headers.indexOf('Attempts');
+    const nextRetryIdx = headers.indexOf('NextRetryAt');
+    const lastErrorIdx = headers.indexOf('LastError');
+    const updatedAtIdx = headers.indexOf('UpdatedAt');
+    const recipientIdx = headers.indexOf('Recipient');
+    const subjectIdx = headers.indexOf('Subject');
+    const bodyIdx = headers.indexOf('Body');
+
+    for (let i = 1; i < values.length; i++) {
+      if (tasksToProcess.length >= limit) break;
+      const row = values[i];
+      const taskId = idIdx >= 0 ? String(row[idIdx] || '').trim() : '';
+      if (!taskId) continue;
+
+      const status = statusIdx >= 0 ? String(row[statusIdx] || '').trim() : '';
+      const attempts = parseInt((attemptsIdx >= 0 ? row[attemptsIdx] : '0') || '0', 10) || 0;
+      const lastError = lastErrorIdx >= 0 ? String(row[lastErrorIdx] || '').trim() : '';
+      const rowIndex = i + 1;
+      let isReady = false;
+
+      if (status === 'PENDING') {
+        isReady = true;
+      } else if (status === 'RETRY') {
+        const nextRetryStr = nextRetryIdx >= 0 ? row[nextRetryIdx] : '';
+        const nextRetryDate = parseDate_(nextRetryStr);
+        if (!isNaN(nextRetryDate.getTime()) ? nextRetryDate.getTime() <= nowTime : true) {
+          isReady = true;
+        }
+      } else if (status === 'PROCESSING') {
+        const updatedAtStr = updatedAtIdx >= 0 ? row[updatedAtIdx] : '';
+        const updatedAtDate = parseDate_(updatedAtStr);
+        const isStale = isNaN(updatedAtDate.getTime()) || (nowTime - updatedAtDate.getTime() >= PROCESSING_LEASE_MS);
+        if (isStale) {
+          if (lastError.indexOf('DISPATCHING') >= 0 || lastError.indexOf('SENT_UNCONFIRMED') >= 0 || lastError.indexOf('AMBIGUOUS') >= 0) {
+            updateRowByObject_(SHEETS.emailOutbox, rowIndex, {
+              Status: 'UNKNOWN',
+              LastError: 'Cần đối soát: Quá hạn trong pha gửi (' + (lastError || 'DISPATCHING') + '). Cần kiểm tra hòm thư trước khi gửi lại.',
+              UpdatedAt: new Date(nowTime)
+            });
+            continue;
+          }
+          if (attempts >= 3) {
+            updateRowByObject_(SHEETS.emailOutbox, rowIndex, {
+              Status: 'FAILED',
+              LastError: 'Quá hạn xử lý trước pha gửi (đã hết lượt thử lại)',
+              UpdatedAt: new Date(nowTime)
+            });
+            continue;
+          }
+          isReady = true;
+        }
+      }
+
+      if (isReady && attempts < 3) {
+        tasksToProcess.push({
+          id: taskId,
+          recipient: recipientIdx >= 0 ? row[recipientIdx] : '',
+          subject: subjectIdx >= 0 ? row[subjectIdx] : '',
+          body: bodyIdx >= 0 ? row[bodyIdx] : '',
+          attempts: attempts,
+          runId: runId
+        });
+        updateRowByObject_(SHEETS.emailOutbox, rowIndex, {
+          Status: 'PROCESSING',
+          LastError: '[CLAIMED:' + runId + ']',
+          UpdatedAt: new Date(nowTime)
+        });
+      }
+    }
+  } finally {
+    if (lock && hasLock) {
+      try { lock.releaseLock(); } catch (_) {}
+    }
+  }
+
+  if (tasksToProcess.length === 0) {
+    return { processed: 0, sent: 0, failed: 0 };
+  }
+
+  let sentCount = 0;
+  let failCount = 0;
+
+  for (let t = 0; t < tasksToProcess.length; t++) {
+    const task = tasksToProcess[t];
+
+    // Khóa ngắn để kiểm tra quyền sở hữu và ghi nhận pha DISPATCHING bền vững trước khi gọi dịch vụ bên ngoài
+    let preLock = null;
+    let hasPreLock = false;
+    if (typeof LockService !== 'undefined' && LockService.getScriptLock) {
+      preLock = LockService.getScriptLock();
+      try {
+        hasPreLock = preLock.tryLock(5000);
+      } catch (_) {}
+    }
+    if (preLock && !hasPreLock) {
+      console.warn('Không lấy được lock trước pha gửi cho task ' + task.id + ', bỏ qua lượt này.');
+      continue;
+    }
+
+    let verifiedPre = null;
+    try {
+      verifiedPre = findAndVerifyTaskRow_(task.id, task.runId);
+      if (!verifiedPre || !verifiedPre.owned) {
+        console.warn('Task ' + task.id + ' không còn thuộc quyền sở hữu của runId ' + task.runId + ', bỏ qua dispatch.');
+        continue;
+      }
+      // Ghi nhận pha DISPATCHING bền vững vào Sheet trước khi gọi dịch vụ bên ngoài
+      updateRowByObject_(SHEETS.emailOutbox, verifiedPre.rowIndex, {
+        Status: 'PROCESSING',
+        LastError: '[DISPATCHING:' + task.runId + ']',
+        UpdatedAt: new Date()
+      });
+    } catch (preErr) {
+      console.error('Lỗi khi ghi nhận pha DISPATCHING cho task ' + task.id + ':', preErr);
+      // Ghi pha dispatch thất bại -> KHÔNG ĐƯỢC GỌI MailApp!
+      continue;
+    } finally {
+      if (preLock && hasPreLock) {
+        try { preLock.releaseLock(); } catch (_) {}
+      }
+    }
+
+    let sendSuccess = false;
+    let errorMessage = '';
+
+    try {
+      const recipientList = String(task.recipient || '').split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+      if (recipientList.length === 0) {
+        throw new Error('Danh sách người nhận rỗng');
+      }
+      const sendResult = sendNotificationMail_({
+        recipients: recipientList,
+        subject: task.subject,
+        body: task.body,
+        throwOnError: true
+      });
+      if (sendResult && sendResult.success === false) {
+        throw new Error(sendResult.error || 'Gửi email không thành công');
+      }
+      sendSuccess = true;
+      sentCount++;
+    } catch (err) {
+      errorMessage = err.message || String(err);
+      console.error('Lỗi khi gửi email task ' + task.id + ':', err);
+      failCount++;
+    }
+
+    // Khóa ngắn để cập nhật kết quả sau gửi
+    let postLock = null;
+    let hasPostLock = false;
+    if (typeof LockService !== 'undefined' && LockService.getScriptLock) {
+      postLock = LockService.getScriptLock();
+      try {
+        hasPostLock = postLock.tryLock(5000);
+      } catch (postLockErr) {
+        console.warn('Lỗi khi tryLock sau pha gửi:', postLockErr);
+        hasPostLock = false;
+      }
+    }
+
+    if (postLock && !hasPostLock) {
+      console.warn('Không lấy được lock sau pha gửi cho task ' + task.id + ', dừng cập nhật để tránh ghi đè ngoài khóa.');
+      continue;
+    }
+
+    try {
+      const verifiedPost = findAndVerifyTaskRow_(task.id, task.runId);
+      if (!verifiedPost) {
+        console.warn('Không tìm thấy dòng outbox cho task ' + task.id + ' khi cập nhật kết quả.');
+        continue;
+      }
+      if (!verifiedPost.owned) {
+        console.warn('Task ' + task.id + ' đã bị thay đổi trạng thái hoặc mất lease (' + verifiedPost.status + '), bỏ qua cập nhật.');
+        continue;
+      }
+
+      const newAttempts = task.attempts + 1;
+      const now = new Date();
+      if (sendSuccess) {
+        try {
+          updateRowByObject_(SHEETS.emailOutbox, verifiedPost.rowIndex, {
+            Status: 'SENT',
+            Attempts: newAttempts,
+            LastError: '',
+            UpdatedAt: now
+          });
+        } catch (writeErr) {
+          console.error('Email đã gửi nhưng không thể cập nhật SENT cho task ' + task.id + ':', writeErr);
+          try {
+            updateRowByObject_(SHEETS.emailOutbox, verifiedPost.rowIndex, {
+              Status: 'UNKNOWN',
+              Attempts: newAttempts,
+              LastError: 'SENT_UNCONFIRMED: ' + (writeErr.message || String(writeErr)),
+              UpdatedAt: now
+            });
+          } catch (_) {}
+        }
+      } else {
+        if (newAttempts >= 3) {
+          updateRowByObject_(SHEETS.emailOutbox, verifiedPost.rowIndex, {
+            Status: 'FAILED',
+            Attempts: newAttempts,
+            LastError: errorMessage,
+            UpdatedAt: now
+          });
+        } else {
+          const backoffMinutes = newAttempts === 1 ? 2 : 5;
+          const nextRetryAt = new Date(now.getTime() + backoffMinutes * 60 * 1000);
+          updateRowByObject_(SHEETS.emailOutbox, verifiedPost.rowIndex, {
+            Status: 'RETRY',
+            Attempts: newAttempts,
+            NextRetryAt: nextRetryAt,
+            LastError: errorMessage,
+            UpdatedAt: now
+          });
+        }
+      }
+    } catch (updateErr) {
+      console.error('Không thể cập nhật trạng thái outbox task ' + task.id + ':', updateErr);
+    } finally {
+      if (postLock && hasPostLock) {
+        try { postLock.releaseLock(); } catch (_) {}
+      }
+    }
+  }
+
+  return { processed: tasksToProcess.length, sent: sentCount, failed: failCount };
+}
+
+function findAndVerifyTaskRow_(targetTaskId, expectedRunId) {
+  try {
+    const s = deviceSpreadsheet_().getSheetByName(SHEETS.emailOutbox);
+    if (!s) return null;
+    const v = s.getDataRange().getDisplayValues();
+    if (v.length < 2) return null;
+    const h = v[0];
+    const iIdx = h.indexOf('Id');
+    const sIdx = h.indexOf('Status');
+    const lIdx = h.indexOf('LastError');
+    if (iIdx < 0) return null;
+    for (let r = 1; r < v.length; r++) {
+      if (String(v[r][iIdx]).trim() === targetTaskId) {
+        const curStatus = sIdx >= 0 ? String(v[r][sIdx]).trim() : '';
+        const curError = lIdx >= 0 ? String(v[r][lIdx]).trim() : '';
+        const owned = curStatus === 'PROCESSING' && curError.indexOf(expectedRunId) >= 0;
+        return { rowIndex: r + 1, owned: owned, status: curStatus, lastError: curError };
+      }
+    }
+  } catch (_) {}
+  return null;
+}
+
+function setupEmailOutboxTrigger_() {
+  if (typeof ScriptApp === 'undefined' || !ScriptApp.getProjectTriggers) {
+    return { installed: false, error: 'ScriptApp is not available' };
+  }
+  const triggers = ScriptApp.getProjectTriggers();
+  for (let i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === 'processEmailOutbox_') {
+      return { installed: true, alreadyExisted: true, triggerId: triggers[i].getUniqueId() };
+    }
+  }
+  const newTrigger = ScriptApp.newTrigger('processEmailOutbox_')
+    .timeBased()
+    .everyMinutes(5)
+    .create();
+  return { installed: true, alreadyExisted: false, triggerId: newTrigger.getUniqueId() };
+}
+
+/**
+ * Hàm công khai (hiển thị trên thanh chọn hàm của Apps Script Editor)
+ * để cài đặt time-driven trigger xử lý hàng đợi EmailOutbox mỗi 5 phút.
+ */
+function setupEmailOutboxTrigger() {
+  const result = setupEmailOutboxTrigger_();
+  console.log('setupEmailOutboxTrigger result:', JSON.stringify(result));
+  return result;
+}
+
+/**
+ * Hàm công khai để kích hoạt xử lý hàng đợi EmailOutbox thủ công trực tiếp từ Apps Script Editor.
+ */
+function processEmailOutbox() {
+  const result = processEmailOutbox_();
+  console.log('processEmailOutbox result:', JSON.stringify(result));
+  return result;
+}
+
+/**
+ * Hàm công khai để khởi tạo / đồng bộ schema và lưu marker phiên bản từ Apps Script Editor.
+ */
+function migrateSchema() {
+  const result = ensureSchemaVersion_(true);
+  console.log('migrateSchema result:', result);
+  return result;
 }
 
 function logActivity_(action, targetId, targetName, details, actor) {
@@ -2356,10 +2986,28 @@ function reportRepair_(payload, actor) {
   const pendingSyncId = 'SYNC-' + (typeof Utilities !== 'undefined' && Utilities.getUuid ? Utilities.getUuid() : (Date.now() + '-' + Math.random().toString(36).slice(2, 8)));
 
   withDeviceMutationLock_(function() {
+    let deviceRowIndex = -1;
     try {
-      device = findDeviceById_(cleanDeviceId);
-    } catch (devFindErr) {
-      console.warn('Không thể tìm thông tin thiết bị:', devFindErr);
+      if (typeof findDeviceWithRowIndex_ === 'function') {
+        const devFound = findDeviceWithRowIndex_(cleanDeviceId);
+        if (devFound && devFound.rowIndex >= 2) {
+          device = devFound.device;
+          deviceRowIndex = devFound.rowIndex;
+        }
+      }
+    } catch (_) {}
+
+    if (deviceRowIndex < 2) {
+      try {
+        if (!device && typeof findDeviceById_ === 'function') {
+          device = findDeviceById_(cleanDeviceId);
+        }
+        if (typeof findDeviceRow_ === 'function') {
+          deviceRowIndex = findDeviceRow_(cleanDeviceId);
+        }
+      } catch (devFindErr) {
+        console.warn('Không thể tìm thông tin thiết bị:', devFindErr);
+      }
     }
 
     const targetStatus = reportRepairDeviceStatus_(device);
@@ -2367,9 +3015,10 @@ function reportRepair_(payload, actor) {
     const expectedUpdatedAt = device ? (device['Ngày cập nhật'] || '') : '';
 
     // Ghi nhận tác vụ PendingSync vào hàng đợi TRƯỚC KHI cập nhật trạng thái máy
+    let pendingSyncRowIndex = -1;
     try {
       ensureSheet_(SHEETS.pendingSync, PENDING_SYNC_HEADERS);
-      appendObject_(SHEETS.pendingSync, {
+      pendingSyncRowIndex = appendObjectAndGetRowIndex_(SHEETS.pendingSync, {
         SyncId: pendingSyncId,
         TaskType: 'reportRepairDeviceSync',
         RepairRowId: String(repairRowId || ''),
@@ -2383,19 +3032,18 @@ function reportRepair_(payload, actor) {
         RetryCount: 0,
         UpdatedAt: submittedAt
       });
-      pendingSyncSaved = true;
+      pendingSyncSaved = pendingSyncRowIndex >= 2;
     } catch (saveSyncErr) {
       console.error('Không thể lưu tác vụ PendingSync trước khi cập nhật máy:', saveSyncErr);
     }
 
     try {
-      const deviceRowIndex = findDeviceRow_(cleanDeviceId);
       if (deviceRowIndex >= 2) {
         updateRowByObject_(SHEETS.devices, deviceRowIndex, {
           'Hiện trạng thực tế': targetStatus,
           'Ngày cập nhật': new Date()
         });
-        syncDeviceStatusForDevice_(cleanDeviceId);
+        syncDeviceStatusForDevice_(cleanDeviceId, deviceRowIndex);
         deviceSyncSucceeded = true;
       } else {
         syncErrorMessage = 'Không tìm thấy dòng thiết bị để cập nhật: ' + cleanDeviceId;
@@ -2405,20 +3053,28 @@ function reportRepair_(payload, actor) {
       console.error('Đã ghi phiếu nhưng chưa đồng bộ được trạng thái thiết bị:', err);
     }
 
-    // Cập nhật trạng thái PendingSync tương ứng với kết quả cập nhật máy
+    // Cập nhật trạng thái PendingSync tương ứng với kết quả cập nhật máy (trực tiếp theo rowIndex dưới lock)
     if (deviceSyncSucceeded) {
       if (pendingSyncSaved) {
         try {
-          const syncRows = getRowsWithRowIndex_(SHEETS.pendingSync);
-          const savedSync = syncRows.find(function(r) {
-            return String(r.data.SyncId || '').trim() === pendingSyncId;
-          });
-          if (savedSync) {
-            updateRowByObject_(SHEETS.pendingSync, savedSync.rowIndex, {
+          if (pendingSyncRowIndex >= 2) {
+            updateRowByObject_(SHEETS.pendingSync, pendingSyncRowIndex, {
               Status: 'COMPLETED',
               LastError: '',
               UpdatedAt: new Date()
             });
+          } else {
+            const syncRows = getRowsWithRowIndex_(SHEETS.pendingSync);
+            const savedSync = syncRows.find(function(r) {
+              return String(r.data.SyncId || '').trim() === pendingSyncId;
+            });
+            if (savedSync) {
+              updateRowByObject_(SHEETS.pendingSync, savedSync.rowIndex, {
+                Status: 'COMPLETED',
+                LastError: '',
+                UpdatedAt: new Date()
+              });
+            }
           }
         } catch (updateSyncErr) {
           console.warn('Lỗi cập nhật PendingSync COMPLETED:', updateSyncErr);
@@ -2427,16 +3083,24 @@ function reportRepair_(payload, actor) {
     } else {
       if (pendingSyncSaved) {
         try {
-          const syncRows = getRowsWithRowIndex_(SHEETS.pendingSync);
-          const savedSync = syncRows.find(function(r) {
-            return String(r.data.SyncId || '').trim() === pendingSyncId;
-          });
-          if (savedSync) {
-            updateRowByObject_(SHEETS.pendingSync, savedSync.rowIndex, {
+          if (pendingSyncRowIndex >= 2) {
+            updateRowByObject_(SHEETS.pendingSync, pendingSyncRowIndex, {
               LastError: syncErrorMessage,
               RetryCount: 1,
               UpdatedAt: new Date()
             });
+          } else {
+            const syncRows = getRowsWithRowIndex_(SHEETS.pendingSync);
+            const savedSync = syncRows.find(function(r) {
+              return String(r.data.SyncId || '').trim() === pendingSyncId;
+            });
+            if (savedSync) {
+              updateRowByObject_(SHEETS.pendingSync, savedSync.rowIndex, {
+                LastError: syncErrorMessage,
+                RetryCount: 1,
+                UpdatedAt: new Date()
+              });
+            }
           }
         } catch (updateSyncErr) {
           console.warn('Lỗi cập nhật PendingSync retry count:', updateSyncErr);
@@ -2453,12 +3117,17 @@ function reportRepair_(payload, actor) {
     actor
   );
 
-  // Gửi email thông báo báo hỏng
+  // Hàng đợi email thông báo bền vững (EmailOutbox) thay cho gửi email đồng bộ
+  let emailQueued = false;
+  let emailWarning = '';
   try {
     const recipients = device ? getDeviceRecipients_(device) : adminEmails_();
     if (recipients.length > 0) {
-      sendNotificationMail_({
-        recipients: recipients,
+      const enqueueResult = enqueueEmailNotification_({
+        ticketId: String(repairRowId || ''),
+        requestId: requestId,
+        event: 'reportRepairNotification',
+        recipient: recipients,
         subject: '[QLTTB] ⚠️ Báo hỏng thiết bị: ' + (device ? (device['Tên Thiết bị'] || cleanDeviceId) : cleanDeviceId),
         body: [
           '<h3 style="color:#d32f2f;">Thông báo thiết bị báo hỏng</h3>',
@@ -2474,8 +3143,15 @@ function reportRepair_(payload, actor) {
           '<p style="margin-top:16px;">Vui lòng đăng nhập hệ thống <strong>Quản lý Trang thiết bị Y tế</strong> để xem chi tiết và xử lý.</p>'
         ].join('')
       });
+      emailQueued = Boolean(enqueueResult && enqueueResult.queued);
+      if (!emailQueued) {
+        emailWarning = 'Phiếu đã lưu nhưng chưa thể xếp hàng email thông báo: ' + ((enqueueResult && enqueueResult.error) || 'Lỗi hàng đợi');
+      }
     }
-  } catch (err) { console.error('reportRepair_ email failed', err); }
+  } catch (err) {
+    console.error('reportRepair_ outbox enqueue failed', err);
+    emailWarning = 'Phiếu đã lưu nhưng gặp lỗi khi xếp hàng email thông báo.';
+  }
 
   let responseMessage = '';
   let responseSyncStatus = 'completed';
@@ -2500,8 +3176,12 @@ function reportRepair_(payload, actor) {
     repairRowId: String(repairRowId || ''),
     message: responseMessage,
     attachmentCount: evidenceUpload.files.length,
-    attachmentFailures: evidenceUpload.failures
+    attachmentFailures: evidenceUpload.failures,
+    emailQueued: emailQueued
   };
+  if (emailWarning) {
+    response.emailWarning = emailWarning;
+  }
   if (needsManualReview) {
     response.needsManualReview = true;
   }
@@ -3742,29 +4422,56 @@ function getUserField_(user, keys) {
 }
 
 function userUsername_(user) {
-  return String(getUserField_(user, ['Tên đăng nhập', 'Ten dang nhap', 'Username', 'Tài khoản', 'Tai khoan', 'username']) || '').trim();
+  const aliases = (typeof userFieldAliases_ === 'function')
+    ? userFieldAliases_().username
+    : (typeof USER_FIELD_ALIASES !== 'undefined' ? USER_FIELD_ALIASES.username : ['Tên đăng nhập', 'Ten dang nhap', 'Username', 'username', 'Tài khoản', 'Tai khoan', 'Account', 'account']);
+  return String(getUserField_(user, aliases) || '').trim();
 }
 
 function userDisplayName_(user) {
-  return String(getUserField_(user, ['Họ và Tên', 'Họ và tên', 'Ho va Ten', 'Ho va ten', 'Name', 'name']) || userUsername_(user)).trim();
+  const aliases = (typeof userFieldAliases_ === 'function')
+    ? userFieldAliases_().fullName
+    : (typeof USER_FIELD_ALIASES !== 'undefined' ? USER_FIELD_ALIASES.fullName : ['Họ và Tên', 'Họ và tên', 'Ho va Ten', 'Ho va ten', 'Name', 'name', 'Họ tên', 'Ho ten']);
+  return String(getUserField_(user, aliases) || userUsername_(user)).trim();
 }
 
 function userEmail_(user) {
-  return String(getUserField_(user, ['Email', 'email']) || '').trim();
+  const aliases = (typeof userFieldAliases_ === 'function')
+    ? userFieldAliases_().email
+    : (typeof USER_FIELD_ALIASES !== 'undefined' ? USER_FIELD_ALIASES.email : ['Email', 'email']);
+  return String(getUserField_(user, aliases) || '').trim();
 }
 
 function userDepartment_(user) {
-  return String(getUserField_(user, ['Khoa/Phòng', 'Khoa/Phong', 'Khoa/ Phòng', 'Khoa', 'Department', 'department', 'Nơi công tác', 'Noi cong tac']) || '').trim();
+  const aliases = (typeof userFieldAliases_ === 'function')
+    ? userFieldAliases_().department
+    : (typeof USER_FIELD_ALIASES !== 'undefined' ? USER_FIELD_ALIASES.department : ['Khoa/Phòng', 'Khoa/Phong', 'Khoa/ Phòng', 'Khoa', 'khoa', 'Department', 'department', 'Nơi công tác', 'Noi cong tac']);
+  return String(getUserField_(user, aliases) || '').trim();
 }
 
 function userStatus_(user) {
-  return String(getUserField_(user, ['Trạng thái', 'Trang thai', 'Status', 'status']) || 'active').trim().toLowerCase();
+  const aliases = (typeof userFieldAliases_ === 'function')
+    ? userFieldAliases_().status
+    : (typeof USER_FIELD_ALIASES !== 'undefined' ? USER_FIELD_ALIASES.status : ['Trạng thái', 'Trang thai', 'Status', 'status']);
+  return String(getUserField_(user, aliases) || 'active').trim().toLowerCase();
 }
 
 function appendObject_(sheetName, object) {
   const sheet = deviceSpreadsheet_().getSheetByName(sheetName);
   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
   sheet.appendRow(objectToAppendRow_(headers, object));
+}
+
+function appendObjectAndGetRowIndex_(sheetName, object) {
+  if (typeof appendObject_ === 'function') {
+    appendObject_(sheetName, object);
+  }
+  try {
+    const sheet = deviceSpreadsheet_().getSheetByName(sheetName);
+    return sheet && typeof sheet.getLastRow === 'function' ? sheet.getLastRow() : 2;
+  } catch (_) {
+    return 2;
+  }
 }
 
 function updateRowByObject_(sheetName, rowIndex, object) {
@@ -3800,18 +4507,8 @@ function rowObject_(sheetName, rowIndex) {
 }
 
 function findDeviceRow_(deviceId) {
-  const sheet = deviceSpreadsheet_().getSheetByName(SHEETS.devices);
-  const values = sheet.getDataRange().getDisplayValues();
-  if (values.length < 2) return -1;
-  const headers = values[0];
-  const idIndex = headers.indexOf('id');
-  const serialIndex = headers.indexOf('Seri Máy');
-  for (let i = 1; i < values.length; i += 1) {
-    if (String(values[i][idIndex]) === String(deviceId) || String(values[i][serialIndex]) === String(deviceId)) {
-      return i + 1;
-    }
-  }
-  return -1;
+  const found = findDeviceWithRowIndex_(deviceId);
+  return found ? found.rowIndex : -1;
 }
 
 function findTransferRow_(transferId) {
@@ -3833,7 +4530,10 @@ function findUser_(username) {
 }
 
 function isAdmin_(user) {
-  return normalize_(getUserField_(user, ['Quyền hạn', 'Quyền', 'Role', 'role'])) === 'admin';
+  const aliases = (typeof userFieldAliases_ === 'function')
+    ? userFieldAliases_().role
+    : (typeof USER_FIELD_ALIASES !== 'undefined' ? USER_FIELD_ALIASES.role : ['Quyền hạn', 'Quyen han', 'Quyền', 'Quyen', 'Role', 'role']);
+  return normalize_(getUserField_(user, aliases)) === 'admin';
 }
 
 function normalize_(value) {
@@ -3982,10 +4682,8 @@ function json_(data) {
 // ============================
 
 function findDeviceById_(deviceId) {
-  const id = String(deviceId || '').trim();
-  if (!id) return null;
-  const devices = getRows_(SHEETS.devices);
-  return devices.find(d => String(d.id || '').trim() === id || String(d['Seri Máy'] || '').trim() === id) || null;
+  const found = findDeviceWithRowIndex_(deviceId);
+  return found ? found.device : null;
 }
 
 function emailsByNames_(namesStr) {
@@ -4046,8 +4744,13 @@ function getDeviceRecipients_(device) {
 
 function sendNotificationMail_(options) {
   try {
-    const recipients = (options.recipients || []).filter(Boolean);
-    if (recipients.length === 0) return;
+    const recipients = ((options && options.recipients) || []).filter(Boolean);
+    if (recipients.length === 0) {
+      if (options && options.throwOnError) {
+        throw new Error('Danh sách người nhận rỗng');
+      }
+      return { success: false, error: 'Danh sách người nhận rỗng' };
+    }
     
     const unique = Array.from(new Set(recipients));
     const htmlBody = [
@@ -4057,7 +4760,7 @@ function sendNotificationMail_(options) {
       '<p style="margin:4px 0 0;font-size:13px;opacity:0.9;">Hệ thống Quản lý Trang thiết bị Y tế</p>',
       '</div>',
       '<div style="padding:24px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 8px 8px;">',
-      options.body || '',
+      (options && options.body) || '',
       '</div>',
       '<p style="font-size:11px;color:#999;text-align:center;margin-top:12px;">',
       'Email tự động từ hệ thống QLTTB - Vui lòng không trả lời email này.',
@@ -4067,11 +4770,16 @@ function sendNotificationMail_(options) {
     
     MailApp.sendEmail({
       to: unique.join(','),
-      subject: options.subject || '[QLTTB] Thông báo',
+      subject: (options && options.subject) || '[QLTTB] Thông báo',
       htmlBody: htmlBody
     });
+    return { success: true };
   } catch (err) {
     console.error('sendNotificationMail_ failed', err);
+    if (options && options.throwOnError) {
+      throw err;
+    }
+    return { success: false, error: err.message || String(err) };
   }
 }
 
@@ -4278,7 +4986,9 @@ function findUserRowIndex_(username) {
   if (values.length < 2) return -1;
   const headers = values[0];
   
-  const keys = ['Tên đăng nhập', 'Ten dang nhap', 'Username', 'Tài khoản', 'Tai khoan', 'username'];
+  const keys = (typeof userFieldAliases_ === 'function')
+    ? userFieldAliases_().username
+    : (typeof USER_FIELD_ALIASES !== 'undefined' ? USER_FIELD_ALIASES.username : ['Tên đăng nhập', 'Ten dang nhap', 'Username', 'username', 'Tài khoản', 'Tai khoan', 'Account', 'account']);
   let usernameIndex = -1;
   for (let i = 0; i < headers.length; i++) {
     const normHeader = normalizeHeader_(headers[i]);
@@ -4414,6 +5124,127 @@ function editUser_(payload) {
   }
   
   return { success: true, message: 'Cập nhật thông tin người dùng thành công.' };
+}
+
+function addUser_(payload, actor) {
+  const username = String(payload.username || '').trim();
+  const rawPin = String(payload.pin || '').trim();
+  const fullName = String(payload.fullName || payload.name || '').trim();
+  const email = String(payload.email || '').trim();
+  const department = String(payload.department || '').trim();
+  const role = String(payload.role || 'User').trim();
+
+  if (!username) {
+    return { success: false, message: 'Tên đăng nhập không được để trống.' };
+  }
+  if (!rawPin) {
+    return { success: false, message: 'Vui lòng cung cấp mã PIN khởi tạo cho tài khoản.' };
+  }
+
+  const lock = (typeof LockService !== 'undefined' && LockService.getScriptLock) ? LockService.getScriptLock() : null;
+  const hasLock = lock ? lock.tryLock(10000) : true;
+  if (!hasLock) {
+    return { success: false, message: 'Hệ thống đang bận xử lý yêu cầu tạo tài khoản khác, vui lòng thử lại sau.' };
+  }
+
+  try {
+    const existingUser = findUser_(username);
+    if (existingUser) {
+      return { success: false, message: 'Tên đăng nhập "' + username + '" đã tồn tại trong hệ thống.' };
+    }
+
+    const sheet = userSheet_();
+    if (!sheet) {
+      return { success: false, message: 'Không thể kết nối đến bảng dữ liệu người dùng.' };
+    }
+
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+    if (!headers || !headers.length) {
+      return { success: false, message: 'Bảng dữ liệu người dùng không có tiêu đề cột.' };
+    }
+
+    const aliases = (typeof userFieldAliases_ === 'function')
+      ? userFieldAliases_()
+      : (typeof USER_FIELD_ALIASES !== 'undefined' ? USER_FIELD_ALIASES : {
+          username: ['Tên đăng nhập', 'Ten dang nhap', 'Username', 'username', 'Tài khoản', 'Tai khoan', 'Account', 'account'],
+          pin: (typeof pinFieldKeys_ === 'function') ? pinFieldKeys_() : ['Mã PIN', 'Ma PIN', 'PIN', 'pin', 'Mật khẩu', 'Mat khau', 'Password', 'password', 'Mã pin', 'MÃ PIN'],
+          role: ['Quyền hạn', 'Quyen han', 'Quyền', 'Quyen', 'Role', 'role'],
+          fullName: ['Họ và Tên', 'Họ và tên', 'Ho va Ten', 'Ho va ten', 'Name', 'name', 'Họ tên', 'Ho ten'],
+          email: ['Email', 'email'],
+          department: ['Khoa/Phòng', 'Khoa/Phong', 'Khoa/ Phòng', 'Khoa', 'khoa', 'Department', 'department', 'Nơi công tác', 'Noi cong tac'],
+          status: ['Trạng thái', 'Trang thai', 'Status', 'status']
+        });
+
+    function findHeaderIndex(targetAliases) {
+      const normalizedAliases = targetAliases.map(normalizeHeader_);
+      for (let i = 0; i < headers.length; i += 1) {
+        if (normalizedAliases.indexOf(normalizeHeader_(headers[i])) !== -1) {
+          return i;
+        }
+      }
+      return -1;
+    }
+
+    const usernameColIdx = findHeaderIndex(aliases.username);
+    const pinColIdx = findHeaderIndex(aliases.pin);
+
+    if (usernameColIdx === -1 || pinColIdx === -1) {
+      return {
+        success: false,
+        message: 'Bảng người dùng thiếu cột bắt buộc: ' + (usernameColIdx === -1 ? 'Tài khoản/Username ' : '') + (pinColIdx === -1 ? 'Mã PIN/Mật khẩu' : '')
+      };
+    }
+
+    const newRow = new Array(headers.length).fill('');
+    newRow[usernameColIdx] = username;
+    newRow[pinColIdx] = hashPin_(rawPin);
+
+    const roleColIdx = findHeaderIndex(aliases.role);
+    if (roleColIdx !== -1) newRow[roleColIdx] = role;
+
+    const nameColIdx = findHeaderIndex(aliases.fullName);
+    if (nameColIdx !== -1) newRow[nameColIdx] = fullName || username;
+
+    const emailColIdx = findHeaderIndex(aliases.email);
+    if (emailColIdx !== -1) newRow[emailColIdx] = email;
+
+    const deptColIdx = findHeaderIndex(aliases.department);
+    if (deptColIdx !== -1) newRow[deptColIdx] = department;
+
+    const statusColIdx = findHeaderIndex(aliases.status);
+    if (statusColIdx !== -1) newRow[statusColIdx] = 'active';
+
+    sheet.appendRow(newRow);
+    if (typeof invalidateUserRowsCache_ === 'function') {
+      invalidateUserRowsCache_();
+    }
+
+    if (typeof logActivity_ === 'function') {
+      logActivity_(
+        'Thêm người dùng mới',
+        username,
+        '',
+        'Đã tạo tài khoản cho khoa ' + (department || 'Chưa phân bổ') + ' với quyền ' + role + '.',
+        actor
+      );
+    }
+
+    return {
+      success: true,
+      message: 'Thêm tài khoản ' + username + ' thành công.',
+      user: {
+        username: username,
+        role: role,
+        name: fullName || username,
+        email: email,
+        department: department
+      }
+    };
+  } finally {
+    if (lock) {
+      lock.releaseLock();
+    }
+  }
 }
 // Form files are served through authenticated API calls, never by a public Drive link.
 const FORM_HEADERS = ['Id','Category','Title','TemplateId','Owner','SenderName','Department','CreatedAt','FileId','FileName','MimeType','RequestId','Active','ReplacesId'];

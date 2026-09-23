@@ -75,7 +75,7 @@ jobs:
         run: npm run build
         env:
           VITE_BASE_PATH: /quanlyttb/
-          VITE_THIET_BI_API_URL: https://script.google.com/macros/s/AKfycbwlvL63EEQlg_04HAUiABotRaS0E6YHdbGOEWy0MiHznQZ3cVYHwMixr-iJuiQFDa2QOw/exec
+          VITE_THIET_BI_API_URL: https://script.google.com/macros/s/AKfycbyNb85JIqyXWZvEw13371h6yDigEuEfD20yCdBLzM6PWmXQLNJ2M9od0FHYxD40gHQUFA/exec
           VITE_AI_API_URL: https://pbthuong-ai.hf.space
 
       - name: Add SPA fallback

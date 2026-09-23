@@ -5,12 +5,12 @@ import {
   CheckCircle, XCircle, Download, FileText, Loader2, RefreshCw, Wrench, Search, X
 } from 'lucide-react';
 import { Card, CardBody, Button, Input, Table, TableHead, TableBody, TableRow, TableHeader, TableCell, Badge, useToast, FileUploader, Modal } from '../components/ui';
-import { reportRepair, approveRepair, generateRequestId, type RepairData } from '../services/api';
+import { reportRepair, approveRepair, generateRequestId, type RepairData, type DeviceData } from '../services/api';
 import { useDevices } from '../hooks/useDevices';
 import { useRepairs } from '../hooks/useRepairs';
 import { useAuth } from '../authContext';
 import { exportCsv } from '../utils/exportCsv';
-import { Html5QrcodeScanner } from 'html5-qrcode';
+import { QrScannerDialog } from '../components/qr/QrScannerDialog';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { removeVietnameseTones, matchSmartSearch } from '../utils/stringUtils';
@@ -57,12 +57,13 @@ const RepairRequest: React.FC<RepairRequestProps> = ({ defaultTab = 'requests' }
   const [deviceSearch, setDeviceSearch] = useState('');
   const [description, setDescription] = useState('');
   const [priority, setPriority] = useState<'normal' | 'urgent'>('normal');
-  const [isScanning, setIsScanning] = useState(false);
+  const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [message, setMessage] = useState('');
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [statusFile, setStatusFile] = useState<File | null>(null);
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
   const [submitStage, setSubmitStage] = useState<'idle' | 'preparing' | 'sending'>('idle');
+  const [prepProgress, setPrepProgress] = useState<{ completed: number; total: number } | null>(null);
   const submissionRequestIdRef = React.useRef<string>('');
 
   useEffect(() => {
@@ -169,50 +170,11 @@ const RepairRequest: React.FC<RepairRequestProps> = ({ defaultTab = 'requests' }
 
   const visibleRepairs = filteredRepairs;
 
-  // ===== QR Scanner =====
-  useEffect(() => {
-    if (isScanning) {
-      const scanner = new Html5QrcodeScanner(
-        "qr-reader",
-        { fps: 10, qrbox: { width: 250, height: 250 } },
-        false
-      );
-
-      scanner.render((decodedText) => {
-        let newId = '';
-        try {
-          if (decodedText.includes('/devices/')) {
-            const pathParts = decodedText.split('/devices/');
-            if (pathParts.length > 1) {
-              const urlId = pathParts[1].split('?')[0].split('#')[0];
-              newId = decodeURIComponent(urlId).trim();
-            }
-          } else {
-            try {
-              const parsed = JSON.parse(decodedText);
-              if (parsed.id) newId = parsed.id;
-            } catch {
-              const match = decodedText.match(/MÃ THIẾT BỊ:\s*([^\n]+)/i);
-              if (match) newId = match[1].trim();
-              else newId = decodedText.trim();
-            }
-          }
-        } catch {
-          newId = decodedText.trim();
-        }
-
-        if (newId) {
-          setDeviceId(newId);
-          setIsScanning(false);
-          toast.success(`Đã nhận diện thiết bị: ${newId}`);
-        }
-      }, () => { /* ignore */ });
-
-      return () => {
-        scanner.clear().catch(e => console.error("Scanner clear fail", e));
-      };
-    }
-  }, [isScanning, toast]);
+  // ===== QR Scanner Handler =====
+  const handleDeviceSelectFromScanner = (selectedDevice: DeviceData) => {
+    setDeviceId(selectedDevice.id);
+    toast.success(`Đã chọn thiết bị: ${selectedDevice.id} - ${selectedDevice.name}`);
+  };
 
   // ===== Submit repair =====
   const handleSubmit = async (e: React.FormEvent) => {
@@ -225,13 +187,20 @@ const RepairRequest: React.FC<RepairRequestProps> = ({ defaultTab = 'requests' }
     setIsSubmitting(true);
     setMessage('');
     setSubmitStage(selectedFiles.length > 0 ? 'preparing' : 'sending');
+    setPrepProgress(selectedFiles.length > 0 ? { completed: 0, total: selectedFiles.length } : null);
 
     let attachments: RepairAttachmentPayload[] = [];
     let isPreparingAttachments = selectedFiles.length > 0;
 
     try {
       if (selectedFiles.length > 0) {
-        attachments = await buildAttachmentPayloads(selectedFiles);
+        attachments = await buildAttachmentPayloads(
+          selectedFiles,
+          readFileAsBase64,
+          (completed, total) => {
+            setPrepProgress({ completed, total });
+          }
+        );
       }
       isPreparingAttachments = false;
 
@@ -261,16 +230,17 @@ const RepairRequest: React.FC<RepairRequestProps> = ({ defaultTab = 'requests' }
       if (response.success) {
         submissionRequestIdRef.current = '';
         const repairRowId = response.repairRowId || response.repair?.rowId || '';
+        const emailNotice = response.emailQueued ? ' (thông báo đang chờ gửi)' : '';
         if (response.syncStatus === 'pending' || response.partialSuccess) {
           toast.warning(
             response.message ||
-            `Đã ghi nhận phiếu sửa chữa (${repairRowId || 'thành công'}), nhưng trạng thái thiết bị đang chờ đối soát tự động.`
+            `Đã ghi nhận phiếu sửa chữa (${repairRowId || 'thành công'})${emailNotice}, nhưng trạng thái thiết bị đang chờ đối soát tự động.`
           );
         } else {
           toast.success(
             repairRowId
-              ? `Yêu cầu báo hỏng đã được gửi thành công! (Mã phiếu: ${repairRowId})`
-              : 'Yêu cầu báo hỏng đã được gửi thành công!'
+              ? `Yêu cầu báo hỏng đã được gửi thành công! (Mã phiếu: ${repairRowId})${emailNotice}`
+              : `Yêu cầu báo hỏng đã được gửi thành công!${emailNotice}`
           );
         }
         if (attachments.length > 1 && response.attachmentCount === undefined) {
@@ -299,15 +269,19 @@ const RepairRequest: React.FC<RepairRequestProps> = ({ defaultTab = 'requests' }
       } else {
         toast.error('Có lỗi xảy ra: ' + (response.message || 'Lỗi không xác định'));
       }
-    } catch {
+    } catch (err: unknown) {
+      const errorMsg = (err && typeof err === 'object' && 'message' in err && typeof (err as { message: string }).message === 'string')
+        ? (err as { message: string }).message
+        : '';
       toast.error(
         isPreparingAttachments
           ? 'Không thể đọc tệp đính kèm. Vui lòng chọn lại tệp và thử lại.'
-          : 'Không thể gửi yêu cầu. Vui lòng kiểm tra kết nối và thử lại.'
+          : (errorMsg || 'Không thể gửi yêu cầu. Bản nháp và mã yêu cầu đã được giữ lại; vui lòng kiểm tra kết nối và nhấn thử lại.')
       );
     } finally {
       setIsSubmitting(false);
       setSubmitStage('idle');
+      setPrepProgress(null);
     }
   };
 
@@ -503,7 +477,18 @@ const RepairRequest: React.FC<RepairRequestProps> = ({ defaultTab = 'requests' }
 
             <form className="form-section request-form" onSubmit={handleSubmit}>
               <div className="request-field request-device-field">
-                <label className="input-label" htmlFor="repair-device">Thiết bị báo hỏng</label>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px', flexWrap: 'wrap', gap: '8px' }}>
+                  <label className="input-label" htmlFor="repair-device" style={{ margin: 0 }}>Thiết bị báo hỏng</label>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    icon={<ScanLine size={15} />}
+                    onClick={event => { event.currentTarget.focus(); setIsScannerOpen(true); }}
+                  >
+                    Quét mã thiết bị
+                  </Button>
+                </div>
                 <Input
                   value={deviceSearch}
                   onChange={event => setDeviceSearch(event.target.value)}
@@ -546,18 +531,6 @@ const RepairRequest: React.FC<RepairRequestProps> = ({ defaultTab = 'requests' }
                   className="request-text-input"
                   style={{ width: '100%', padding: '8px 12px', border: '1px solid var(--border)', borderRadius: '6px', fontSize: '0.9rem', marginTop: '4px', boxSizing: 'border-box' }}
                 />
-
-                <div className="request-inline-action">
-                  <Button type="button" variant={isScanning ? "danger" : "secondary"} icon={<ScanLine size={18} />} onClick={() => setIsScanning(!isScanning)}>
-                    {isScanning ? 'Đóng máy quét' : 'Quét mã QR trên thiết bị'}
-                  </Button>
-                </div>
-
-                {isScanning && (
-                  <div className="request-scanner-frame" style={{ marginTop: '16px', borderRadius: '8px', overflow: 'hidden', border: '2px solid var(--primary)' }}>
-                    <div id="qr-reader" style={{ width: '100%' }}></div>
-                  </div>
-                )}
               </div>
 
               {/* Info grid: vị trí & người báo */}
@@ -645,13 +618,17 @@ const RepairRequest: React.FC<RepairRequestProps> = ({ defaultTab = 'requests' }
 
               <div className="request-submit-status" aria-live="polite">
                 {submitStage === 'preparing'
-                  ? `Đang chuẩn bị ${selectedFiles.length} tệp minh chứng…`
+                  ? `Đang chuẩn bị tệp (${prepProgress ? prepProgress.completed : 0}/${selectedFiles.length})...`
                   : submitStage === 'sending'
                     ? 'Đang gửi yêu cầu, vui lòng chờ…'
                     : ''}
               </div>
               <Button type="submit" variant="primary" className="submit-btn request-submit-btn" icon={isSubmitting ? <Loader2 size={20} style={{ animation: 'spin 1s linear infinite' }} /> : <Send size={20} />} disabled={isSubmitting}>
-                {submitStage === 'preparing' ? 'Đang chuẩn bị tệp...' : isSubmitting ? 'Đang gửi...' : 'Gửi yêu cầu sửa chữa'}
+                {submitStage === 'preparing'
+                  ? `Đang chuẩn bị tệp (${prepProgress ? prepProgress.completed : 0}/${selectedFiles.length})...`
+                  : isSubmitting
+                    ? 'Đang gửi...'
+                    : 'Gửi yêu cầu sửa chữa'}
               </Button>
             </form>
           </CardBody>
@@ -885,6 +862,16 @@ const RepairRequest: React.FC<RepairRequestProps> = ({ defaultTab = 'requests' }
           </div>
         )}
       </Modal>
+
+      {isScannerOpen && <QrScannerDialog
+        isOpen={isScannerOpen}
+        onClose={() => setIsScannerOpen(false)}
+        mode="repair"
+        devices={devices}
+        title="Quét thiết bị báo hỏng"
+        subtitle="Báo hỏng / sửa chữa"
+        onSelectDevice={handleDeviceSelectFromScanner}
+      />}
     </div>
   );
 };

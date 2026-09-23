@@ -5,9 +5,33 @@ import { isArchivedDocumentStatus } from '../utils/documentWorkflow.ts';
 import { unwrapAppsScriptReadResponse } from './apiEnvelope.ts';
 
 // Public API endpoint; authentication is enforced by the Apps Script backend.
-const DEFAULT_GOOGLE_SHEETS_API_URL = 'https://script.google.com/macros/s/AKfycbwlvL63EEQlg_04HAUiABotRaS0E6YHdbGOEWy0MiHznQZ3cVYHwMixr-iJuiQFDa2QOw/exec';
+export const DEFAULT_GOOGLE_SHEETS_API_URL = 'https://script.google.com/macros/s/AKfycbyNb85JIqyXWZvEw13371h6yDigEuEfD20yCdBLzM6PWmXQLNJ2M9od0FHYxD40gHQUFA/exec';
 
 const ENV = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {};
+export const CUSTOM_API_URL_STORAGE_KEY = 'qlttb.custom_apps_script_url';
+
+export const getCustomAppsScriptUrl = (): string | null => {
+  try {
+    const val = localStorage.getItem(CUSTOM_API_URL_STORAGE_KEY);
+    return val && val.trim() ? val.trim() : null;
+  } catch {
+    return null;
+  }
+};
+
+export const setCustomAppsScriptUrl = (url: string): void => {
+  const trimmed = url.trim();
+  if (trimmed) {
+    localStorage.setItem(CUSTOM_API_URL_STORAGE_KEY, trimmed);
+  } else {
+    localStorage.removeItem(CUSTOM_API_URL_STORAGE_KEY);
+  }
+};
+
+export const getGoogleSheetsApiUrl = (): string => {
+  return getCustomAppsScriptUrl() || ENV.VITE_THIET_BI_API_URL || DEFAULT_GOOGLE_SHEETS_API_URL;
+};
+
 export const GOOGLE_SHEETS_API_URL = ENV.VITE_THIET_BI_API_URL || DEFAULT_GOOGLE_SHEETS_API_URL;
 const USE_LOCAL_SNAPSHOT = ENV.VITE_USE_LOCAL_SNAPSHOT === 'true';
 
@@ -262,6 +286,8 @@ export interface ReportRepairResponse {
   attachmentFailures?: string[];
   idempotentReplay?: boolean;
   errorCode?: ApiErrorCode;
+  emailQueued?: boolean;
+  emailWarning?: string;
 }
 
 export interface TransferData {
@@ -376,7 +402,7 @@ export const postAction = async (
     }
   }
   try {
-    const data = await safeFetch(GOOGLE_SHEETS_API_URL, {
+    const data = await safeFetch(getGoogleSheetsApiUrl(), {
       method: 'POST',
       // GAS accepts text/plain without a CORS preflight.
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -405,7 +431,7 @@ export const postAction = async (
   }
 };
 
-const postReadAction = async <T = unknown>(action: string, options?: { timeoutMs?: number }): Promise<T> => safeFetch(GOOGLE_SHEETS_API_URL, {
+const postReadAction = async <T = unknown>(action: string, options?: { timeoutMs?: number }): Promise<T> => safeFetch(getGoogleSheetsApiUrl(), {
   method: 'POST',
   // Note: text/plain is used as a workaround to avoid CORS preflight options requests with Google Apps Script
   headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -500,19 +526,19 @@ export const fetchUsers = async (): Promise<UserData[]> => {
   if (!data || !Array.isArray(data)) return [];
 
   const rows = data as ApiRow[];
-  const validData = rows.filter(item => getText(item, ['Tên đăng nhập', 'Username', 'username']) !== '');
+  const validData = rows.filter(item => getText(item, ['Tên đăng nhập', 'Username', 'username', 'Tài khoản', 'Tai khoan', 'Account', 'account']) !== '');
 
   return validData.map(item => ({
-    username: getText(item, ['Tên đăng nhập', 'Username', 'username']),
-    role: getText(item, ['Quyền hạn', 'Quyền', 'Role'], 'User'),
-    name: getText(item, ['Họ và Tên', 'Họ và tên', 'Name'], 'Người dùng'),
+    username: getText(item, ['Tên đăng nhập', 'Username', 'username', 'Tài khoản', 'Tai khoan', 'Account', 'account']),
+    role: getText(item, ['Quyền hạn', 'Quyền', 'Role', 'role'], 'User'),
+    name: getText(item, ['Họ và Tên', 'Họ và tên', 'Name', 'name', 'fullName', 'fullname'], 'Người dùng'),
     email: getText(item, ['Email', 'email']),
-    department: getText(item, ['Khoa/Phòng', 'Khoa/Phong']),
+    department: getText(item, ['Khoa/Phòng', 'Khoa/Phong', 'Khoa/ Phòng', 'Khoa', 'khoa', 'Department', 'department', 'Nơi công tác', 'Noi cong tac']),
   }));
 };
 
 export const loginUser = async (payload: { username: string; pin: string }) => {
-  const data = await safeFetch(GOOGLE_SHEETS_API_URL, {
+  const data = await safeFetch(getGoogleSheetsApiUrl(), {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body: JSON.stringify({ action: 'login', payload }),
@@ -972,12 +998,110 @@ export const editUser = async (payload: {
   if (data && data.success && data.user) {
     const item = data.user as ApiRow;
     data.user = {
-      username: getText(item, ['Tên đăng nhập', 'Username', 'username']),
-      role: getText(item, ['Quyền hạn', 'Quyền', 'Role'], 'User'),
-      name: getText(item, ['Họ và Tên', 'Họ và tên', 'Name'], 'Người dùng'),
+      username: getText(item, ['Tên đăng nhập', 'Username', 'username', 'Tài khoản', 'Tai khoan', 'account']),
+      role: getText(item, ['Quyền hạn', 'Quyền', 'Role', 'role'], 'User'),
+      name: getText(item, ['Họ và Tên', 'Họ và tên', 'Name', 'name', 'fullName', 'fullname'], 'Người dùng'),
       email: getText(item, ['Email', 'email']),
-      department: getText(item, ['Khoa/Phòng', 'Khoa/Phong', 'Khoa/ Phòng', 'Khoa', 'Department', 'department']),
+      department: getText(item, ['Khoa/Phòng', 'Khoa/Phong', 'Khoa/ Phòng', 'Khoa', 'khoa', 'Department', 'department', 'Nơi công tác', 'Noi cong tac']),
     } as UserData;
   }
   return data;
 };
+
+export const addUser = async (payload: {
+  username: string;
+  fullName?: string;
+  email?: string;
+  department?: string;
+  role?: string;
+  pin?: string;
+}): Promise<{ success: boolean; message: string; user?: UserData }> => {
+  const data = await postAction('addUser', payload);
+  if (data && data.success && data.user) {
+    const item = data.user as ApiRow;
+    data.user = {
+      username: getText(item, ['Tên đăng nhập', 'Username', 'username', 'Tài khoản', 'Tai khoan', 'account']),
+      role: getText(item, ['Quyền hạn', 'Quyền', 'Role', 'role'], 'User'),
+      name: getText(item, ['Họ và Tên', 'Họ và tên', 'Name', 'name', 'fullName', 'fullname'], 'Người dùng'),
+      email: getText(item, ['Email', 'email']),
+      department: getText(item, ['Khoa/Phòng', 'Khoa/Phong', 'Khoa/ Phòng', 'Khoa', 'khoa', 'Department', 'department', 'Nơi công tác', 'Noi cong tac']),
+    } as UserData;
+  }
+  return data as { success: boolean; message: string; user?: UserData };
+};
+
+export const testAppsScriptConnection = async (targetUrl: string): Promise<{ success: boolean; message: string }> => {
+  const trimmed = targetUrl.trim();
+  if (!trimmed.startsWith('https://script.google.com/macros/s/') || !trimmed.endsWith('/exec')) {
+    return {
+      success: false,
+      message: 'URL không đúng định dạng. Link Web App Google Apps Script phải bắt đầu bằng https://script.google.com/macros/s/ và kết thúc bằng /exec',
+    };
+  }
+
+  try {
+    const data = await safeFetch(trimmed, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'getOperationalState', payload: getAuthPayload() }),
+      timeoutMs: 15000,
+    });
+
+    if (!data || typeof data !== 'object') {
+      return {
+        success: false,
+        message: 'Máy chủ Apps Script phản hồi nhưng cấu trúc dữ liệu không hợp lệ.',
+      };
+    }
+
+    const resp = data as Record<string, unknown>;
+
+    if (resp.success === false) {
+      return {
+        success: false,
+        message: (typeof resp.message === 'string' && resp.message)
+          ? resp.message
+          : 'Máy chủ Apps Script phản hồi trạng thái thất bại.',
+      };
+    }
+
+    const isValidOperationalPayload = (obj: unknown): boolean => {
+      if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
+        return false;
+      }
+      const rec = obj as Record<string, unknown>;
+      const hasValidWorkflowOverrides =
+        Boolean(rec.workflowOverrides) &&
+        typeof rec.workflowOverrides === 'object' &&
+        !Array.isArray(rec.workflowOverrides);
+      const hasValidCostEntries = Array.isArray(rec.costEntries);
+
+      return hasValidWorkflowOverrides && hasValidCostEntries;
+    };
+
+    const hasValidStructure =
+      resp.success === true &&
+      (isValidOperationalPayload(resp.data) || isValidOperationalPayload(resp));
+
+    if (!hasValidStructure) {
+      return {
+        success: false,
+        message: (typeof resp.message === 'string' && resp.message)
+          ? resp.message
+          : 'Máy chủ phản hồi nhưng không đúng cấu trúc dữ liệu của hệ thống quản lý thiết bị.',
+      };
+    }
+
+    return {
+      success: true,
+      message: 'Kết nối máy chủ Apps Script thành công! Máy chủ phản hồi dữ liệu hợp lệ.',
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return {
+      success: false,
+      message: `Không thể kết nối đến máy chủ: ${msg}`,
+    };
+  }
+};
+

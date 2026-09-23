@@ -1,7 +1,30 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Camera, ClipboardCheck, Download, FileImage, Keyboard, PackageCheck, Plus, QrCode, RefreshCw, Search, Trash2, XCircle } from 'lucide-react';
-import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
-import { Badge, Button, Card, CardBody, CardHeader, Input, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, useToast } from '../components/ui';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  AlertTriangle,
+  Download,
+  Lock,
+  Plus,
+  QrCode,
+  RefreshCw,
+  ScanLine,
+  Trash2,
+  XCircle,
+} from 'lucide-react';
+import {
+  Badge,
+  Button,
+  Card,
+  CardBody,
+  CardHeader,
+  Input,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+  useToast,
+} from '../components/ui';
 import { useDevices } from '../hooks/useDevices';
 import { useAuth } from '../authContext';
 import { exportCsv } from '../utils/exportCsv';
@@ -16,12 +39,13 @@ import {
 import './InventoryQr.css';
 import { readAuthSession } from '../authSession';
 import { useActionPrompt } from '../hooks/useActionPrompt';
+import { QrScannerDialog } from '../components/qr/QrScannerDialog';
+import type { InventoryCondition, InventoryConfirmPayload } from '../components/qr/types';
+import { cleanText } from '../components/qr/qrCodeMatcher';
 
 const STORAGE_KEY = 'qlttb.inventory_runs';
 
-type InventoryCondition = 'ok' | 'damaged' | 'maintenance' | 'wrong_location';
 type InventoryStatus = 'active' | 'closed';
-type ScanInputMode = 'manual' | 'camera' | 'image';
 
 interface InventoryScan {
   deviceId: string;
@@ -59,20 +83,6 @@ const conditionText: Record<InventoryCondition, string> = {
   maintenance: 'Cần bảo trì',
   wrong_location: 'Sai khoa/phòng',
 };
-
-const SCANNER_ELEMENT_ID = 'inventory-qr-camera-reader';
-
-const scannerFormats = [
-  Html5QrcodeSupportedFormats.QR_CODE,
-  Html5QrcodeSupportedFormats.CODE_128,
-  Html5QrcodeSupportedFormats.CODE_39,
-  Html5QrcodeSupportedFormats.EAN_13,
-  Html5QrcodeSupportedFormats.EAN_8,
-  Html5QrcodeSupportedFormats.UPC_A,
-  Html5QrcodeSupportedFormats.UPC_E,
-  Html5QrcodeSupportedFormats.ITF,
-  Html5QrcodeSupportedFormats.DATA_MATRIX,
-];
 
 const readRuns = (owner: string): InventoryRun[] => {
   try {
@@ -131,31 +141,6 @@ const mergeInventoryRunHistory = (
   ));
 };
 
-const cleanText = (value: unknown, fallback = '') => String(value || fallback).trim();
-
-const extractScanCode = (value: string) => {
-  const text = value.trim();
-  if (!text) return '';
-  try {
-    const url = new URL(text);
-    const segments = url.pathname.split('/').filter(Boolean);
-    return decodeURIComponent(segments[segments.length - 1] || text).trim();
-  } catch {
-    return text;
-  }
-};
-
-const matchDeviceByCode = (devices: DeviceData[], rawCode: string) => {
-  const code = extractScanCode(rawCode).toLowerCase();
-  if (!code) return null;
-  const matches = devices.filter(device => {
-    const id = cleanText(device.id).toLowerCase();
-    const serial = cleanText(device.serial || device['Seri Máy']).toLowerCase();
-    return id === code || id.split(';').map(value => value.trim()).includes(code) || serial === code;
-  });
-  return matches.length === 1 ? matches[0] : null;
-};
-
 const formatDateTime = (value: string) => {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
@@ -180,22 +165,17 @@ const InventoryQr: React.FC = () => {
   const { username, name } = useAuth();
   const { ask, dialog: actionDialog } = useActionPrompt();
   const toast = useToast();
+
   const [runs, setRuns] = useState<InventoryRun[]>(() => readRuns(username));
   const [selectedRunId, setSelectedRunId] = useState(() => readRuns(username)[0]?.runId || '');
   const [runName, setRunName] = useState('');
   const [runDepartment, setRunDepartment] = useState('all');
-  const [scanCode, setScanCode] = useState('');
-  const [actualDepartment, setActualDepartment] = useState('');
-  const [condition, setCondition] = useState<InventoryCondition>('ok');
-  const [note, setNote] = useState('');
   const [isSyncing, setIsSyncing] = useState(false);
-  const [scanMode, setScanMode] = useState<ScanInputMode>('manual');
-  const [isCameraActive, setIsCameraActive] = useState(false);
-  const [isImageScanning, setIsImageScanning] = useState(false);
   const [historyStatus, setHistoryStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [historyError, setHistoryError] = useState('');
-  const scannerRef = useRef<Html5Qrcode | null>(null);
-  const lastDecodedRef = useRef('');
+
+  // Scanner Dialog State
+  const [isScannerOpen, setIsScannerOpen] = useState(false);
 
   const departments = useMemo(() => (
     Array.from(new Set(devices.map(device => cleanText(device.department, 'Chưa phân bổ')).filter(Boolean)))
@@ -274,103 +254,6 @@ const InventoryQr: React.FC = () => {
   useEffect(() => {
     void loadInventoryHistory();
   }, [loadInventoryHistory]);
-
-  const stopCamera = useCallback(async () => {
-    const scanner = scannerRef.current;
-    if (!scanner) return;
-    try {
-      if (scanner.isScanning) {
-        await scanner.stop();
-      }
-      scanner.clear();
-    } catch {
-      // Camera cleanup should not block inventory input.
-    } finally {
-      scannerRef.current = null;
-      setIsCameraActive(false);
-    }
-  }, []);
-
-  useEffect(() => () => {
-    void stopCamera();
-  }, [stopCamera]);
-
-  useEffect(() => {
-    if (scanMode !== 'camera') {
-      void stopCamera();
-    }
-  }, [scanMode, stopCamera]);
-
-  const applyDecodedCode = useCallback((decodedText: string, source: 'camera' | 'image') => {
-    const nextCode = extractScanCode(decodedText);
-    if (!nextCode) return;
-    setScanCode(nextCode);
-    lastDecodedRef.current = nextCode;
-    toast.success(source === 'camera' ? `Đã quét được mã: ${nextCode}` : `Đã đọc mã từ ảnh: ${nextCode}`);
-  }, [toast]);
-
-  const handleStartCamera = async () => {
-    if (!activeRun || activeRun.status === 'closed' || activeRun.isServerSummaryOnly) {
-      toast.warning('Vui lòng mở đợt kiểm kê trước khi quét camera.');
-      return;
-    }
-    try {
-      await stopCamera();
-      lastDecodedRef.current = '';
-      const scanner = new Html5Qrcode(SCANNER_ELEMENT_ID, {
-        formatsToSupport: scannerFormats,
-        useBarCodeDetectorIfSupported: true,
-        verbose: false,
-      });
-      scannerRef.current = scanner;
-      await scanner.start(
-        { facingMode: 'environment' },
-        { fps: 10, qrbox: { width: 240, height: 240 }, aspectRatio: 1.777778 },
-        decodedText => {
-          const nextCode = extractScanCode(decodedText);
-          if (!nextCode || nextCode === lastDecodedRef.current) return;
-          applyDecodedCode(nextCode, 'camera');
-          void stopCamera();
-        },
-        () => undefined
-      );
-      setIsCameraActive(true);
-    } catch {
-      scannerRef.current = null;
-      setIsCameraActive(false);
-      toast.error('Không mở được camera. Hãy kiểm tra quyền camera hoặc dùng nhập tay/quét ảnh.');
-    }
-  };
-
-  const handleImageScan = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    event.target.value = '';
-    if (!file) return;
-    if (!activeRun || activeRun.status === 'closed' || activeRun.isServerSummaryOnly) {
-      toast.warning('Vui lòng mở đợt kiểm kê trước khi quét ảnh.');
-      return;
-    }
-    setIsImageScanning(true);
-    let scanner: Html5Qrcode | null = null;
-    try {
-      scanner = new Html5Qrcode('inventory-qr-image-reader', {
-        formatsToSupport: scannerFormats,
-        useBarCodeDetectorIfSupported: true,
-        verbose: false,
-      });
-      const decodedText = await scanner.scanFile(file, false);
-      applyDecodedCode(decodedText, 'image');
-    } catch {
-      toast.error('Không đọc được mã trong ảnh. Hãy chụp rõ mã hơn hoặc nhập thủ công.');
-    } finally {
-      try {
-        scanner?.clear();
-      } catch {
-        // File scanner cleanup is best-effort.
-      }
-      setIsImageScanning(false);
-    }
-  };
 
   const getExpectedDevicesForRun = (run: InventoryRun) => {
     if (run.department === 'all') return devices;
@@ -452,27 +335,26 @@ const InventoryQr: React.FC = () => {
     toast.success(sheetName ? `Đã tạo đợt kiểm kê và lưu Google Sheets: ${sheetName}` : 'Đã tạo đợt kiểm kê mới.');
   };
 
-  const handleScan = async (event?: React.FormEvent) => {
-    event?.preventDefault();
-    if (isSyncing) return;
-    if (activeRun?.status === 'closed') { toast.warning('Đợt kiểm kê đã khóa.'); return; }
+  const handleConfirmInventoryScan = async ({
+    device,
+    actualDepartment: confirmedActualDept,
+    condition: confirmedCondition,
+    note: confirmedNote,
+  }: InventoryConfirmPayload): Promise<{ success: boolean; message?: string }> => {
     if (!activeRun) {
-      toast.warning('Vui lòng tạo đợt kiểm kê trước.');
-      return;
+      return { success: false, message: 'Vui lòng tạo hoặc chọn đợt kiểm kê trước.' };
+    }
+    if (activeRun.status === 'closed') {
+      return { success: false, message: 'Đợt kiểm kê đã khóa.' };
     }
     if (activeRun.isServerSummaryOnly) {
-      toast.warning('Lịch sử từ máy chủ chỉ có số liệu tổng hợp và không thể tiếp tục quét.');
-      return;
-    }
-    const device = matchDeviceByCode(devices, scanCode);
-    if (!device) {
-      toast.error('Mã QR/Serial không khớp duy nhất một thiết bị. Vui lòng nhập đầy đủ mã quản lý.');
-      return;
+      return { success: false, message: 'Lịch sử từ máy chủ chỉ có số liệu tổng hợp.' };
     }
 
     const expectedDepartment = cleanText(device.department, 'Chưa phân bổ');
-    const nextActualDepartment = actualDepartment || (activeRun.department === 'all' ? expectedDepartment : activeRun.department);
-    const nextCondition: InventoryCondition = expectedDepartment !== nextActualDepartment ? 'wrong_location' : condition;
+    const nextActualDepartment = confirmedActualDept || (activeRun.department === 'all' ? expectedDepartment : activeRun.department);
+    const nextCondition: InventoryCondition = expectedDepartment !== nextActualDepartment ? 'wrong_location' : confirmedCondition;
+
     const nextScan: InventoryScan = {
       deviceId: device.id,
       deviceName: device.name,
@@ -481,7 +363,7 @@ const InventoryQr: React.FC = () => {
       expectedDepartment,
       actualDepartment: nextActualDepartment,
       condition: nextCondition,
-      note: note.trim(),
+      note: confirmedNote.trim(),
     };
 
     const nextRuns = runs.map(run => {
@@ -491,15 +373,23 @@ const InventoryQr: React.FC = () => {
     });
     const nextRun = nextRuns.find(run => run.runId === activeRun.runId);
     persistRuns(nextRuns);
-    setScanCode('');
-    setNote('');
-    setCondition('ok');
+
     const sheetName = nextRun ? await syncRunToGoogleSheets(nextRun, nextRuns) : '';
-    toast.success(sheetName ? `Đã ghi nhận mã QR ${device.id} và lưu Google Sheets.` : `Đã ghi nhận mã QR: ${device.id}`);
+    const successMsg = sheetName
+      ? `Đã ghi nhận ${device.id} và lưu Google Sheets (${sheetName}).`
+      : `Đã ghi nhận ${device.id} (lưu tạm trên máy).`;
+    toast.success(successMsg);
+    return { success: true, message: successMsg };
   };
 
   const handleCloseRun = async () => {
     if (!activeRun || activeRun.isServerSummaryOnly) return;
+    const confirmed = await ask({
+      title: 'Khóa đợt kiểm kê',
+      description: `Bạn có chắc muốn khóa đợt kiểm kê "${activeRun.name}"? Sau khi khóa sẽ không thể quét thêm thiết bị.`,
+    });
+    if (confirmed === null) return;
+
     const nextRuns: InventoryRun[] = runs.map(run => (
       run.runId === activeRun.runId ? { ...run, status: 'closed' as const } : run
     ));
@@ -519,7 +409,10 @@ const InventoryQr: React.FC = () => {
 
   const handleDeleteRun = async () => {
     if (!activeRun) return;
-    const confirmed = await ask({ title: 'Xóa đợt kiểm kê', description: `Xóa đợt kiểm kê "${activeRun.name}"? Dữ liệu đã quét của đợt này sẽ bị xóa khỏi danh sách.` });
+    const confirmed = await ask({
+      title: 'Xóa đợt kiểm kê',
+      description: `Xóa đợt kiểm kê "${activeRun.name}"? Dữ liệu đã quét của đợt này sẽ bị xóa khỏi danh sách.`,
+    });
     if (confirmed === null) return;
 
     setIsSyncing(true);
@@ -569,9 +462,20 @@ const InventoryQr: React.FC = () => {
     exportCsv([...scannedRows, ...missingRows], `KiemKeQR_${activeRun.runId}.csv`);
   };
 
+  const isScannerDisabled = !activeRun || activeRun.status === 'closed' || Boolean(activeRun.isServerSummaryOnly);
+  const scannerDisabledReason = !activeRun
+    ? 'Vui lòng tạo hoặc chọn một đợt kiểm kê trước khi quét.'
+    : activeRun.status === 'closed'
+      ? 'Đợt kiểm kê này đã được khóa. Không thể quét thêm.'
+      : activeRun.isServerSummaryOnly
+        ? 'Lịch sử từ máy chủ ở chế độ chỉ đọc.'
+        : '';
+
   return (
     <div className="inventory-page">
       {actionDialog}
+
+      {/* Header */}
       <div className="page-header inventory-header">
         <div>
           <h1 className="page-title">
@@ -579,11 +483,11 @@ const InventoryQr: React.FC = () => {
             Kiểm kê QR
           </h1>
           <p className="dashboard-subtitle">
-            Tạo đợt kiểm kê theo khoa/phòng, ghi nhận mã QR và xuất chênh lệch ngay tại hiện trường.
+            Tạo đợt kiểm kê theo khoa/phòng, quét mã QR/mã vạch và theo dõi tiến độ thực tế ngay tại hiện trường.
           </p>
         </div>
         <div className="inventory-header-actions">
-          <Badge variant={activeRun?.status === 'closed' ? 'neutral' : 'primary'}>
+          <Badge variant={activeRun?.status === 'closed' ? 'neutral' : activeRun ? 'primary' : 'warning'}>
             {activeRun ? (activeRun.status === 'closed' ? 'Đã khóa' : 'Đang kiểm kê') : 'Chưa có đợt'}
           </Badge>
           {activeRun?.sheetName && (
@@ -606,206 +510,65 @@ const InventoryQr: React.FC = () => {
               </Button>
             </>
           )}
-          <Button variant="secondary" icon={<Download size={16} />} onClick={handleExport} disabled={!activeRun || activeRun.isServerSummaryOnly}>
-            CSV
+          <Button
+            variant="secondary"
+            icon={<Download size={16} />}
+            onClick={handleExport}
+            disabled={!activeRun || activeRun.isServerSummaryOnly}
+          >
+            Xuất CSV
           </Button>
         </div>
       </div>
+
       {historyError && <div className="inventory-sync-note" role="alert">Không tải được lịch sử: {historyError}</div>}
 
-      <section className="inventory-grid">
-        <Card className="inventory-panel">
-          <CardHeader title="Tạo đợt kiểm kê" />
-          <CardBody>
-            <div className="inventory-form-grid">
-              <Input
-                label="Tên đợt"
-                value={runName}
-                onChange={event => setRunName(event.target.value)}
-                placeholder="Ví dụ: Kiểm kê Khoa HSCC tháng 06"
-              />
-              <label className="inventory-field">
-                <span>Khoa/phòng</span>
-                <select value={runDepartment} onChange={event => setRunDepartment(event.target.value)}>
-                  <option value="all">Toàn trung tâm</option>
-                  {departments.map(department => (
-                    <option key={department} value={department}>{department}</option>
-                  ))}
-                </select>
-              </label>
-              <Button variant="primary" icon={<Plus size={16} />} onClick={handleCreateRun} disabled={isSyncing}>
-                {isSyncing ? 'Đang lưu...' : 'Tạo đợt kiểm kê'}
-              </Button>
+      {/* Hero Scanner Card: Prominent Scan Action */}
+      <Card className="inventory-hero-card">
+        <CardBody>
+          <div className="inventory-hero-layout">
+            <div className="inventory-hero-info">
+              <div className="inventory-hero-header">
+                <span className="inventory-hero-badge">Đợt hiện tại</span>
+                <h2 className="inventory-hero-title">
+                  {activeRun ? activeRun.name : 'Chưa chọn đợt kiểm kê'}
+                </h2>
+              </div>
+              <p className="inventory-hero-desc">
+                {activeRun
+                  ? `Phạm vi: ${activeRun.department === 'all' ? 'Toàn trung tâm' : activeRun.department} · Tạo bởi: ${activeRun.createdBy}`
+                  : 'Hãy chọn hoặc tạo đợt kiểm kê để bắt đầu quét thiết bị.'}
+              </p>
+              {scannerDisabledReason && (
+                <div className="inventory-hero-warning" role="alert">
+                  <AlertTriangle size={16} />
+                  <span>{scannerDisabledReason}</span>
+                </div>
+              )}
             </div>
 
-            <label className="inventory-field inventory-run-picker">
-              <span>Đợt đang mở</span>
-              <div className="inventory-run-picker-row">
-                <select value={activeRun?.runId || ''} onChange={event => setSelectedRunId(event.target.value)}>
-                  {runs.length === 0 && <option value="">Chưa có đợt kiểm kê</option>}
-                  {runs.map(run => (
-                    <option key={run.runId} value={run.runId}>
-                      {run.name} - {run.department === 'all' ? 'Toàn trung tâm' : run.department}{run.isServerSummaryOnly ? ' · Lịch sử máy chủ' : ''}
-                    </option>
-                  ))}
-                </select>
-                <Button
-                  type="button"
-                  variant="danger"
-                  icon={<Trash2 size={16} />}
-                  onClick={handleDeleteRun}
-                  disabled={!activeRun || isSyncing}
-                >
-                  Xóa đợt
-                </Button>
-              </div>
-              {activeRun?.sheetName && (
-                <small className="inventory-sync-note">
-                  Đang lưu tại Google Sheets: {activeRun.sheetName}
-                </small>
-              )}
-              {activeRun?.isServerSummaryOnly && (
-                <small className="inventory-sync-note">
-                  Lịch sử này được tải từ máy chủ ở chế độ chỉ xem; dữ liệu chi tiết từng lượt quét không có trong API tổng hợp.
-                </small>
-              )}
-            </label>
-          </CardBody>
-        </Card>
+            <div className="inventory-hero-action">
+              <Button
+                type="button"
+                variant="primary"
+                size="lg"
+                icon={<ScanLine size={24} />}
+                className="inventory-main-scan-btn"
+                onClick={event => { event.currentTarget.focus(); setIsScannerOpen(true); }}
+                disabled={isScannerDisabled}
+              >
+                Quét thiết bị
+              </Button>
+            </div>
+          </div>
+        </CardBody>
+      </Card>
 
-        <Card className="inventory-panel">
-          <CardHeader title="Ghi nhận mã QR" />
-          <CardBody>
-            <form className="inventory-scan-form" onSubmit={handleScan}>
-              <div className="inventory-scan-mode" role="tablist" aria-label="Cách nhập mã thiết bị">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  icon={<Keyboard size={16} />}
-                  className={scanMode === 'manual' ? 'is-active' : ''}
-                  onClick={() => setScanMode('manual')}
-                  aria-selected={scanMode === 'manual'}
-                >
-                  Thủ công
-                </Button>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  icon={<Camera size={16} />}
-                  className={scanMode === 'camera' ? 'is-active' : ''}
-                  onClick={() => setScanMode('camera')}
-                  aria-selected={scanMode === 'camera'}
-                >
-                  Camera
-                </Button>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  icon={<FileImage size={16} />}
-                  className={scanMode === 'image' ? 'is-active' : ''}
-                  onClick={() => setScanMode('image')}
-                  aria-selected={scanMode === 'image'}
-                >
-                  Ảnh
-                </Button>
-              </div>
-              <Input
-                label="Mã QR / Serial"
-                value={scanCode}
-                onChange={event => setScanCode(event.target.value)}
-                placeholder="Quét hoặc nhập mã thiết bị"
-                icon={<Search size={16} />}
-                disabled={!activeRun || activeRun.status === 'closed' || activeRun.isServerSummaryOnly}
-              />
-              {scanMode === 'camera' && (
-                <div className="inventory-camera-panel">
-                  <div id={SCANNER_ELEMENT_ID} className="inventory-camera-reader" aria-live="polite" />
-                  <div className="inventory-camera-actions">
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      icon={<Camera size={16} />}
-                      onClick={handleStartCamera}
-                      disabled={!activeRun || activeRun.status === 'closed' || activeRun.isServerSummaryOnly || isCameraActive}
-                    >
-                      {isCameraActive ? 'Đang quét' : 'Mở camera'}
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      icon={<XCircle size={16} />}
-                      onClick={() => void stopCamera()}
-                      disabled={!isCameraActive}
-                    >
-                      Tắt camera
-                    </Button>
-                  </div>
-                </div>
-              )}
-              {scanMode === 'image' && (
-                <div className="inventory-image-panel">
-                  <label className="inventory-image-picker">
-                    <FileImage size={18} />
-                    <span>{isImageScanning ? 'Đang đọc ảnh...' : 'Chọn hoặc chụp ảnh mã'}</span>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={handleImageScan}
-                      disabled={!activeRun || activeRun.status === 'closed' || activeRun.isServerSummaryOnly || isImageScanning}
-                    />
-                  </label>
-                  <div id="inventory-qr-image-reader" className="inventory-image-reader" aria-hidden="true" />
-                </div>
-              )}
-              <label className="inventory-field">
-                <span>Khoa/phòng thực tế</span>
-                <select
-                  value={actualDepartment}
-                  onChange={event => setActualDepartment(event.target.value)}
-                  disabled={!activeRun || activeRun.status === 'closed' || activeRun.isServerSummaryOnly}
-                >
-                  <option value="">Theo đợt kiểm kê</option>
-                  {departments.map(department => (
-                    <option key={department} value={department}>{department}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="inventory-field">
-                <span>Tình trạng</span>
-                <select
-                  value={condition}
-                  onChange={event => setCondition(event.target.value as InventoryCondition)}
-                  disabled={!activeRun || activeRun.status === 'closed' || activeRun.isServerSummaryOnly}
-                >
-                  <option value="ok">Đúng vị trí</option>
-                  <option value="damaged">Hư hỏng</option>
-                  <option value="maintenance">Cần bảo trì</option>
-                </select>
-              </label>
-              <Input
-                label="Ghi chú"
-                value={note}
-                onChange={event => setNote(event.target.value)}
-                placeholder="Ghi chú hiện trạng nếu cần"
-                disabled={!activeRun || activeRun.status === 'closed' || activeRun.isServerSummaryOnly}
-              />
-              <div className="inventory-scan-actions">
-                <Button type="submit" variant="primary" icon={<PackageCheck size={16} />} disabled={!activeRun || activeRun.status === 'closed' || activeRun.isServerSummaryOnly || isSyncing}>
-                  {isSyncing ? 'Đang lưu...' : 'Ghi nhận mã QR'}
-                </Button>
-                <Button type="button" variant="secondary" icon={<ClipboardCheck size={16} />} onClick={handleCloseRun} disabled={!activeRun || activeRun.status === 'closed' || activeRun.isServerSummaryOnly || isSyncing}>
-                  Khóa đợt
-                </Button>
-              </div>
-            </form>
-          </CardBody>
-        </Card>
-      </section>
-
+      {/* Progress & Summary Bar */}
       <section className="inventory-summary-grid" aria-label="Tổng hợp kiểm kê">
         <div className="inventory-summary-item">
           <strong>{expectedDeviceCount}</strong>
-          <span>Thiết bị cần kiểm kê</span>
+          <span>Cần kiểm kê</span>
         </div>
         <div className="inventory-summary-item is-success">
           <strong>{scannedDeviceCount}</strong>
@@ -813,21 +576,22 @@ const InventoryQr: React.FC = () => {
         </div>
         <div className="inventory-summary-item is-warning">
           <strong>{missingDeviceCount}</strong>
-          <span>Thiết bị chưa quét</span>
+          <span>Chưa quét</span>
         </div>
         <div className="inventory-summary-item is-danger">
           <strong>{wrongDepartmentCount}</strong>
-          <span>Sai khoa/phòng</span>
+          <span>Sai vị trí</span>
         </div>
-        <div className="inventory-summary-item">
+        <div className="inventory-summary-item is-accent">
           <strong>{displayedCompletionRate}%</strong>
-          <span>Tỷ lệ hoàn thành</span>
+          <span>Tiến độ</span>
         </div>
       </section>
 
+      {/* Scanned Results vs Missing Devices Grid */}
       <section className="inventory-results-grid">
         <Card className="inventory-panel">
-          <CardHeader title="Danh sách đã ghi nhận" />
+          <CardHeader title={`Danh sách đã ghi nhận (${scannedDeviceCount})`} />
           <CardBody style={{ padding: 0 }}>
             <Table>
               <TableHead>
@@ -845,7 +609,7 @@ const InventoryQr: React.FC = () => {
                 ) : activeRun?.isServerSummaryOnly ? (
                   <TableRow><TableCell colSpan={5} className="inventory-empty">Lịch sử máy chủ hiện chỉ cung cấp số liệu tổng hợp.</TableCell></TableRow>
                 ) : !activeRun || activeRun.scans.length === 0 ? (
-                  <TableRow><TableCell colSpan={5} className="inventory-empty">Chưa ghi nhận thiết bị nào.</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={5} className="inventory-empty">Chưa ghi nhận thiết bị nào trong đợt này.</TableCell></TableRow>
                 ) : activeRun.scans.map(scan => (
                   <TableRow key={scan.deviceId}>
                     <TableCell>
@@ -868,7 +632,7 @@ const InventoryQr: React.FC = () => {
         </Card>
 
         <Card className="inventory-panel">
-          <CardHeader title="Thiết bị chưa quét" />
+          <CardHeader title={`Thiết bị chưa quét (${missingDeviceCount})`} />
           <CardBody style={{ padding: 0 }}>
             <Table>
               <TableHead>
@@ -885,7 +649,7 @@ const InventoryQr: React.FC = () => {
                   <TableRow><TableCell colSpan={3} className="inventory-empty">Có {missingDeviceCount} thiết bị chưa quét theo số liệu máy chủ.</TableCell></TableRow>
                 ) : missingDevices.length === 0 ? (
                   <TableRow><TableCell colSpan={3} className="inventory-empty"><XCircle size={16} /> Không còn thiết bị chưa quét.</TableCell></TableRow>
-                ) : missingDevices.slice(0, 12).map((device: DeviceData) => (
+                ) : missingDevices.slice(0, 15).map((device: DeviceData) => (
                   <TableRow key={device.id}>
                     <TableCell><strong>{device.id}</strong></TableCell>
                     <TableCell>{device.name}</TableCell>
@@ -897,6 +661,95 @@ const InventoryQr: React.FC = () => {
           </CardBody>
         </Card>
       </section>
+
+      {/* Batch Management Section (Separated to prevent accidental clicks during scanning) */}
+      <section className="inventory-management-section">
+        <Card className="inventory-panel">
+          <CardHeader title="Quản lý đợt kiểm kê" />
+          <CardBody>
+            <div className="inventory-management-grid">
+              {/* Select Active Run */}
+              <div className="inventory-management-col">
+                <label className="inventory-field">
+                  <span>Chọn đợt đang làm việc</span>
+                  <select value={activeRun?.runId || ''} onChange={event => setSelectedRunId(event.target.value)}>
+                    {runs.length === 0 && <option value="">Chưa có đợt kiểm kê</option>}
+                    {runs.map(run => (
+                      <option key={run.runId} value={run.runId}>
+                        {run.name} ({run.department === 'all' ? 'Toàn trung tâm' : run.department}){run.status === 'closed' ? ' [Đã khóa]' : ''}{run.isServerSummaryOnly ? ' · Máy chủ' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="inventory-management-actions">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    icon={<Lock size={16} />}
+                    onClick={handleCloseRun}
+                    disabled={!activeRun || activeRun.status === 'closed' || activeRun.isServerSummaryOnly || isSyncing}
+                  >
+                    Khóa đợt
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="danger"
+                    icon={<Trash2 size={16} />}
+                    onClick={handleDeleteRun}
+                    disabled={!activeRun || isSyncing}
+                  >
+                    Xóa đợt
+                  </Button>
+                </div>
+              </div>
+
+              {/* Create New Run */}
+              <div className="inventory-management-col">
+                <div className="inventory-create-form">
+                  <Input
+                    label="Tạo đợt mới"
+                    value={runName}
+                    onChange={event => setRunName(event.target.value)}
+                    placeholder="VD: Kiểm kê Khoa Cấp cứu T09/2026"
+                  />
+                  <label className="inventory-field">
+                    <span>Khoa/phòng kiểm kê</span>
+                    <select value={runDepartment} onChange={event => setRunDepartment(event.target.value)}>
+                      <option value="all">Toàn trung tâm</option>
+                      {departments.map(department => (
+                        <option key={department} value={department}>{department}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <Button
+                    variant="primary"
+                    icon={<Plus size={16} />}
+                    onClick={handleCreateRun}
+                    disabled={isSyncing}
+                  >
+                    {isSyncing ? 'Đang tạo...' : 'Tạo đợt kiểm kê mới'}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </CardBody>
+        </Card>
+      </section>
+
+      {/* Unified QR Scanner Dialog */}
+      {isScannerOpen && <QrScannerDialog
+        isOpen={isScannerOpen}
+        onClose={() => setIsScannerOpen(false)}
+        mode="inventory"
+        devices={devices}
+        title="Quét thiết bị kiểm kê"
+        subtitle={activeRun ? `Đợt: ${activeRun.name} · Khoa: ${activeRun.department === 'all' ? 'Toàn trung tâm' : activeRun.department}` : undefined}
+        activeRunTitle={activeRun?.name}
+        activeRunDepartment={activeRun?.department}
+        scannedDeviceIds={scannedIds}
+        departments={departments}
+        onConfirmInventory={handleConfirmInventoryScan}
+      />}
     </div>
   );
 };

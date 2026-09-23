@@ -402,6 +402,17 @@ const TopNav: React.FC<TopNavProps> = ({ toggleSidebar }) => {
                 >
                   <Edit size={16} /> Sửa thông tin
                 </button>
+                {isAdmin && (
+                  <button
+                    onClick={() => {
+                      setShowDropdown(false);
+                      navigate('/admin');
+                    }}
+                    className="user-dropdown-item"
+                  >
+                    <Shield size={16} /> Quản trị hệ thống
+                  </button>
+                )}
                 <button
                   onClick={handleLogout}
                   className="user-dropdown-item danger"

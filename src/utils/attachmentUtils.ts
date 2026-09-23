@@ -188,12 +188,40 @@ export const optimizeImageForUpload = async (file: File): Promise<File> => {
 
 export const buildAttachmentPayloads = async (
   files: File[],
-  readContent: (file: File) => Promise<string> = readFileAsBase64
+  readContent: (file: File) => Promise<string> = readFileAsBase64,
+  onProgress?: (completed: number, total: number) => void,
+  concurrency = 1
 ): Promise<RepairAttachmentPayload[]> => {
-  const payloads: RepairAttachmentPayload[] = [];
-  for (const original of files) {
-    const file = await optimizeImageForUpload(original);
-    payloads.push({ name: file.name, mimeType: getAttachmentMimeType(file), size: file.size, content: await readContent(file) });
-  }
+  const total = files.length;
+  if (total === 0) return [];
+  const payloads: RepairAttachmentPayload[] = new Array(total);
+  let completedCount = 0;
+
+  // Mặc định tuần tự (concurrency = 1) để bảo vệ bộ nhớ RAM di động; hỗ trợ cấu hình đồng thời nhỏ khi cần
+  const poolLimit = Math.max(1, Math.min(concurrency, total));
+  let nextIndex = 0;
+
+  const worker = async () => {
+    while (nextIndex < total) {
+      const currentIndex = nextIndex++;
+      const original = files[currentIndex];
+      const file = await optimizeImageForUpload(original);
+      const content = await readContent(file);
+      payloads[currentIndex] = {
+        name: file.name,
+        mimeType: getAttachmentMimeType(file),
+        size: file.size,
+        content
+      };
+      completedCount++;
+      if (onProgress) {
+        onProgress(completedCount, total);
+      }
+    }
+  };
+
+  const workers = Array.from({ length: poolLimit }, () => worker());
+  await Promise.all(workers);
+
   return payloads;
 };

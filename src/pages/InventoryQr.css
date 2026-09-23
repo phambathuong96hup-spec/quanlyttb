@@ -17,169 +17,113 @@
   gap: 10px;
 }
 
-.inventory-header-actions,
-.inventory-scan-actions {
+.inventory-header-actions {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
 }
 
-.inventory-grid,
-.inventory-results-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
-  gap: 14px;
+/* ==========================================================================
+   Hero Scan Action Card
+   ========================================================================== */
+.inventory-hero-card {
+  background: linear-gradient(135deg, #f0fdfa 0%, #ecfeff 100%);
+  border: 1.5px solid #99f6e4;
+  border-left: 5px solid #0d9488;
+  box-shadow: 0 4px 12px rgba(13, 148, 136, 0.08);
 }
 
-.inventory-results-grid {
-  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.65fr);
-}
-
-.inventory-panel {
-  min-width: 0;
-}
-
-.inventory-form-grid,
-.inventory-scan-form {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.inventory-scan-mode,
-.inventory-camera-panel,
-.inventory-image-panel {
-  grid-column: 1 / -1;
-}
-
-.inventory-scan-mode {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-  padding: 4px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: #f8fafc;
-}
-
-.inventory-scan-mode .btn {
-  justify-content: center;
-  min-width: 0;
-}
-
-.inventory-scan-mode .btn.is-active {
-  border-color: var(--primary);
-  background: #ecfeff;
-  color: #0f766e;
-  box-shadow: 0 0 0 2px rgba(13, 148, 136, 0.12);
-}
-
-.inventory-camera-panel,
-.inventory-image-panel {
-  padding: 12px;
-  border: 1px dashed #99f6e4;
-  border-radius: 8px;
-  background: #f0fdfa;
-}
-
-.inventory-camera-reader {
-  min-height: 240px;
-  overflow: hidden;
-  border: 1px solid #ccfbf1;
-  border-radius: 8px;
-  background: #0f172a;
-}
-
-.inventory-camera-reader video,
-.inventory-camera-reader canvas {
-  max-width: 100%;
-  border-radius: 8px;
-}
-
-.inventory-camera-actions {
+.inventory-hero-layout {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 10px;
-}
-
-.inventory-image-picker {
-  display: inline-flex;
-  width: 100%;
-  min-height: 48px;
   align-items: center;
-  justify-content: center;
-  gap: 8px;
-  border: 1px solid #0d9488;
-  border-radius: 8px;
-  background: #ffffff;
-  color: #0f766e;
-  cursor: pointer;
-  font-weight: 800;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
 }
 
-.inventory-image-picker input,
-.inventory-image-reader {
-  display: none;
-}
-
-.inventory-form-grid > button,
-.inventory-scan-actions {
-  align-self: end;
-}
-
-.inventory-field {
+.inventory-hero-info {
   display: flex;
-  min-width: 0;
   flex-direction: column;
   gap: 6px;
+  min-width: 260px;
+  flex: 1;
 }
 
-.inventory-field span {
-  color: var(--text-secondary);
-  font-size: 0.8rem;
+.inventory-hero-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.inventory-hero-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: #ccfbf1;
+  color: #0f766e;
+  font-size: 0.76rem;
   font-weight: 750;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
 
-.inventory-field select {
-  width: 100%;
-  min-height: 42px;
-  padding: 0 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: #ffffff;
-  color: var(--text-primary);
-  font: inherit;
+.inventory-hero-title {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 800;
+  color: #0f172a;
 }
 
-.inventory-field select:focus {
-  outline: 2px solid rgba(37, 99, 235, 0.22);
-  border-color: var(--primary);
+.inventory-hero-desc {
+  margin: 0;
+  color: #475569;
+  font-size: 0.9rem;
+  font-weight: 500;
 }
 
-.inventory-run-picker {
-  margin-top: 14px;
+.inventory-hero-warning {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  color: #b45309;
+  font-size: 0.85rem;
+  font-weight: 650;
 }
 
-.inventory-run-picker-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
+.inventory-hero-action {
+  flex-shrink: 0;
 }
 
-.inventory-run-picker-row .btn {
-  white-space: nowrap;
+.inventory-main-scan-btn {
+  min-height: 52px;
+  min-width: 180px;
+  font-size: 1.05rem !important;
+  font-weight: 800 !important;
+  background: #0d9488 !important;
+  border-color: #0f766e !important;
+  box-shadow: 0 4px 14px rgba(13, 148, 136, 0.35);
+  transition: all 0.2s ease;
 }
 
-.inventory-sync-note {
-  color: var(--success);
-  font-size: 0.78rem;
-  font-weight: 720;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
+.inventory-main-scan-btn:hover:not(:disabled) {
+  background: #0f766e !important;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(13, 148, 136, 0.45);
 }
 
+.inventory-main-scan-btn:disabled {
+  background: #cbd5e1 !important;
+  border-color: #cbd5e1 !important;
+  box-shadow: none;
+}
+
+/* ==========================================================================
+   Summary Metrics Bar
+   ========================================================================== */
 .inventory-summary-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -229,6 +173,28 @@
   background: #fff5f5;
 }
 
+.inventory-summary-item.is-accent {
+  border-color: #99f6e4;
+  background: #f0fdfa;
+}
+
+.inventory-summary-item.is-accent strong {
+  color: #0d9488;
+}
+
+/* ==========================================================================
+   Results Tables
+   ========================================================================== */
+.inventory-results-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.65fr);
+  gap: 14px;
+}
+
+.inventory-panel {
+  min-width: 0;
+}
+
 .inventory-empty {
   text-align: center;
   padding: 28px 14px;
@@ -253,14 +219,88 @@
   line-height: 1.35;
 }
 
+/* ==========================================================================
+   Batch Management (Distinct lower section)
+   ========================================================================== */
+.inventory-management-section {
+  margin-top: 8px;
+}
+
+.inventory-management-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.inventory-management-col {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.inventory-management-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.inventory-create-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.inventory-field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.inventory-field span {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  font-weight: 750;
+}
+
+.inventory-field select {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.inventory-field select:focus {
+  outline: 2px solid rgba(13, 148, 136, 0.22);
+  border-color: #0d9488;
+}
+
+.inventory-sync-note {
+  color: var(--success);
+  font-size: 0.78rem;
+  font-weight: 720;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+/* ==========================================================================
+   Responsive Adaptations
+   ========================================================================== */
 @media (max-width: 1100px) {
-  .inventory-grid,
   .inventory-results-grid {
     grid-template-columns: 1fr;
   }
 
   .inventory-summary-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .inventory-management-grid {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -274,33 +314,16 @@
     width: 100%;
   }
 
-  .inventory-form-grid,
-  .inventory-scan-form,
-  .inventory-summary-grid {
-    grid-template-columns: 1fr;
+  .inventory-hero-layout {
+    flex-direction: column;
+    align-items: stretch;
   }
 
-  .inventory-scan-mode {
-    grid-template-columns: 1fr;
-  }
-
-  .inventory-camera-reader {
-    min-height: 210px;
-  }
-
-  .inventory-camera-actions .btn {
-    flex: 1 1 140px;
-  }
-
-  .inventory-run-picker-row {
-    grid-template-columns: 1fr;
-  }
-
-  .inventory-run-picker-row .btn {
+  .inventory-main-scan-btn {
     width: 100%;
   }
 
-  .inventory-scan-actions .btn {
-    flex: 1 1 180px;
+  .inventory-summary-grid {
+    grid-template-columns: 1fr;
   }
 }

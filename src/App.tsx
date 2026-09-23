@@ -19,6 +19,7 @@ const NormsLookup = lazy(() => import('./pages/NormsLookup'));
 const Reports = lazy(() => import('./pages/Reports'));
 const Operations = lazy(() => import('./pages/Operations'));
 const AIAssistant = lazy(() => import('./pages/AIAssistant'));
+const AdminSettings = lazy(() => import('./pages/AdminSettings'));
 
 const PageLoader = () => (
   <div style={{ padding: '32px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -77,6 +78,7 @@ function App() {
                   <Route path="transfers" element={<Navigate to="/requests?type=transfer" replace />} />
                   <Route path="reports" element={<PrivateRoute><Reports /></PrivateRoute>} />
                   <Route path="ai-assistant" element={<PrivateRoute><AIAssistant /></PrivateRoute>} />
+                  <Route path="admin" element={<PrivateRoute roles={['admin']}><AdminSettings /></PrivateRoute>} />
                 </Route>
 
                 <Route path="*" element={<Navigate to="/dashboard" replace />} />
