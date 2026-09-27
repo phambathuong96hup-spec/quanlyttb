@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { listGrantedCameras } from './cameraDevices';
 import {
   AlertCircle,
   AlertTriangle,
@@ -200,7 +201,7 @@ export const QrScannerDialog: React.FC<QrScannerDialogProps> = ({
           setIsTorchSupported(caps.torch === true);
         } catch { setIsTorchSupported(false); }
         // Enumerate only after permission has been granted by start().
-        void Html5Qrcode.getCameras().then(list => {
+        void listGrantedCameras(navigator.mediaDevices).then(list => {
           if (!isCurrent()) return;
           setCameras(list);
           const settings = scanner.getRunningTrackSettings();
