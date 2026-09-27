@@ -69,13 +69,15 @@ test('inventory confirms once and retains pending data on server failure', async
 
 async function mockScanner(page: Page) {
   await page.addInitScript(() => {
-    if (!navigator.mediaDevices) {
-      Object.defineProperty(navigator, 'mediaDevices', { value: {} });
-    }
-    Object.defineProperty(navigator.mediaDevices, 'enumerateDevices', { value: async () => [
-      { kind: 'videoinput', deviceId: 'rear', label: 'Rear' },
-      { kind: 'videoinput', deviceId: 'front', label: 'Front' },
-    ] });
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: {
+        enumerateDevices: async () => [
+          { kind: 'videoinput', deviceId: 'rear', label: 'Rear' },
+          { kind: 'videoinput', deviceId: 'front', label: 'Front' },
+        ],
+      },
+    });
   });
   await page.route('**/html5-qrcode.js*', route => route.fulfill({ contentType: 'application/javascript', body: `
     window.qrProbe = { active: 0, max: 0, starts: 0, stops: 0, imageStarts: 0 };
