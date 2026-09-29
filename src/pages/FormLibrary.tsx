@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { FileText, Download, Upload, RefreshCw, Trash2 } from 'lucide-react';
+import { FileText, Download, Upload, RefreshCw, Trash2, ArrowRight, ArrowLeftRight, Wrench, ShoppingCart, ScanLine, ShieldCheck } from 'lucide-react';
 import { useAuth } from '../authContext';
 import { Link, useSearchParams } from 'react-router-dom';
 import AutomaticForms from '../components/AutomaticForms';
@@ -35,10 +35,16 @@ export default function FormLibrary() {
  const matches=submissions.filter(r=>r.category===category && `${r.title} ${r.senderName} ${r.department}`.toLocaleLowerCase('vi').includes(query.toLocaleLowerCase('vi')));
  const date=(value:string)=>{const d=new Date(value);return Number.isNaN(d.getTime())?value:d.toLocaleString('vi-VN');};
  return <div className="form-library">
-  <header className="fl-heading"><div><span className="fl-eyebrow">HỒ SƠ NGHIỆP VỤ</span><h1>Mẫu và phiếu</h1><p>Tải phiếu tự động từ yêu cầu hoặc sử dụng mẫu của đơn vị.</p></div><button disabled={busy||loading} onClick={()=>{setInputKey(k=>k+1);void reload();}}><RefreshCw size={16}/>Tải lại</button></header>
+  <header className="fl-heading"><div><span className="fl-eyebrow">TRUNG TÂM HỒ SƠ THIẾT BỊ</span><h1>Mẫu và phiếu</h1><p>Từ yêu cầu đến phiếu hoàn chỉnh.<br/>Tập trung biểu mẫu, theo dõi và tải hồ sơ tại một nơi.</p><span className="fl-access"><ShieldCheck size={15}/>{admin?'Không gian quản trị · Xem tất cả phiếu':'Không gian cá nhân · Phiếu do bạn lập'}</span></div><button aria-label="Tải lại" disabled={busy||loading} onClick={()=>{setInputKey(k=>k+1);void reload();}}><RefreshCw size={16}/>Tải lại</button></header>
+  <nav className="fl-shortcuts" aria-label="Thao tác nhanh">
+   <Link to="/requests?type=repair"><Wrench size={20}/><span>Báo hỏng / sửa chữa</span><ArrowRight size={16}/></Link>
+   <Link to="/requests?type=transfer"><ArrowLeftRight size={20}/><span>Luân chuyển thiết bị</span><ArrowRight size={16}/></Link>
+   <Link to="/requests?type=purchase"><ShoppingCart size={20}/><span>Đề nghị mua sắm</span><ArrowRight size={16}/></Link>
+   <Link to="/inventory"><ScanLine size={20}/><span>Kiểm kê QR</span><ArrowRight size={16}/></Link>
+  </nav>
   <div className="fl-categories" aria-label="Loại biểu mẫu">{Object.entries(formCategories).map(([key,label])=><button key={key} aria-pressed={category===key} disabled={busy} onClick={()=>{setCategory(key as FormCategory);setSelected(null);setReplace(null);setTemplateTitle('');}}>{label}</button>)}</div>
   {error&&<div role="alert" className="fl-error">{error}</div>}{notice&&<div role="status" className="fl-notice">{notice}</div>}
-  <p><Link to={`/requests?type=${category}`}>Lập yêu cầu {formCategories[category].toLowerCase()} để tự tạo phiếu</Link></p>
+  <div className="fl-workspace-heading"><div><span className="fl-eyebrow">HỒ SƠ / {formCategories[category].toLocaleUpperCase('vi')}</span><h2>Theo dõi và tải phiếu</h2></div><Link className="fl-create" to={`/requests?type=${category}`}>Lập yêu cầu {formCategories[category].toLowerCase()}<ArrowRight size={16}/></Link></div>
   <AutomaticForms key={inputKey} category={category}/>
   {loading?<p role="status">Đang tải mẫu và phiếu...</p>:<>
   <section className="fl-section"><div className="fl-section-title"><h2>01 / Mẫu {formCategories[category].toLowerCase()}</h2><span>PDF · Word · Excel</span></div>

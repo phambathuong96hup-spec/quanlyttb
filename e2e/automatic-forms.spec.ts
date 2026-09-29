@@ -12,6 +12,7 @@ test('automatic forms expose both downloads and recover failed jobs without uplo
  });
  await page.goto('/forms?category=repair');
  await expect(page.getByText('Phiếu đề nghị — Máy thở',{exact:true})).toBeVisible();
+ await page.screenshot({path:`tmp/forms-workspace-${test.info().project.name}.png`,fullPage:true});
  await expect(page.getByRole('button',{name:'Tải DOCX',exact:true})).toHaveCount(0);
  await page.getByRole('button',{name:'Tạo lại',exact:true}).click();
  for(const format of ['DOCX','PDF']) {
