@@ -11,7 +11,7 @@ import { useTransfers } from '../hooks/useTransfers';
 import { useRepairs } from '../hooks/useRepairs';
 import { useAuth } from '../authContext';
 import { resolveDeviceListStatus } from '../utils/deviceStatus';
-import { isArchivedDocumentStatus, isRegistrationDocumentType } from '../utils/documentWorkflow';
+import { canRenewDocument, isArchivedDocumentStatus, isRegistrationDocumentType } from '../utils/documentWorkflow';
 import { stripEvidenceLinks } from '../utils/evidenceUtils';
 import { EvidenceLinks } from '../components/EvidenceLinks';
 import './Devices.css';
@@ -345,7 +345,7 @@ const DeviceProfile: React.FC = () => {
       }
     }
     if (docModalMode === 'renew' && !expiryDate) {
-      toast.warning('Vui lòng nhập hạn đăng kiểm mới.');
+      toast.warning('Vui lòng nhập hạn hiệu lực mới sau gia hạn.');
       return;
     }
 
@@ -574,14 +574,14 @@ const DeviceProfile: React.FC = () => {
                               {updatingDocumentId === updateKey ? 'Đang lưu...' : 'Đánh dấu đã gửi'}
                             </Button>
                           )}
-                          {!archived && registrationDocument && (
+                          {canRenewDocument(doc) && (
                             <Button
                               variant="primary"
                               size="sm"
                               icon={<CalendarPlus size={12} />}
                               onClick={() => handleOpenDocModal('renew', doc)}
                             >
-                              Gia hạn đăng kiểm
+                              {registrationDocument ? 'Gia hạn đăng kiểm' : 'Cập nhật kết quả gia hạn'}
                             </Button>
                           )}
                           {!archived && (
@@ -710,7 +710,7 @@ const DeviceProfile: React.FC = () => {
           title={docModalMode === 'add'
             ? '📄 Thêm tài liệu kiểm định mới'
             : docModalMode === 'renew'
-              ? '📅 Gia hạn đăng kiểm'
+              ? '📅 Cập nhật kết quả gia hạn'
               : '📝 Sửa thông tin tài liệu'}
           size="lg"
         >
@@ -720,7 +720,7 @@ const DeviceProfile: React.FC = () => {
                 role="note"
                 style={{ marginBottom: '16px', padding: '12px 14px', border: '1px solid #99f6e4', borderRadius: '8px', background: '#f0fdfa', color: '#115e59', lineHeight: 1.5 }}
               >
-                Nhập số đăng kiểm và hạn mới. Hồ sơ hiện tại sẽ được giữ lại trong lịch sử với trạng thái “Đã gia hạn”.
+                Khi đã nhận kết quả gia hạn, nhập số văn bản, ngày cấp và hạn hiệu lực mới. Hồ sơ hiện tại được giữ trong lịch sử với trạng thái “Đã gia hạn”; hồ sơ mới sẽ cảnh báo trước hạn 45 ngày.
               </div>
             )}
             <div className="document-form-grid">
