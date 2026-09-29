@@ -22,9 +22,26 @@ export async function formFilePayload(file:File) {
 }
 export async function downloadForm(kind:'template'|'submission',id:string) {
  const result=await formCall('downloadFormFile',{kind,id});
+ saveFormDownload(result);
+}
+export interface GeneratedForm {
+ id:string; category:FormCategory; title:string; code:string; senderName:string; department:string;
+ createdAt:string; status:'PENDING'|'PROCESSING'|'READY'|'ERROR'|'BLOCKED_TEMPLATE';
+ ready:boolean; error:string; attempts:number; templateTitle:string; templateId:string;
+}
+export interface AutoFormSetting {
+ id:string; title:string; category:FormCategory; active:boolean; eligible:boolean; preview:GeneratedForm|null;
+}
+export const generatedFormStatus: Record<GeneratedForm['status'],string> = {
+ PENDING:'Chờ tạo phiếu', PROCESSING:'Đang tạo phiếu', READY:'Sẵn sàng', ERROR:'Cần xử lý', BLOCKED_TEMPLATE:'Chờ Admin kích hoạt mẫu',
+};
+export async function downloadGeneratedForm(id:string,format:'docx'|'pdf') {
+ saveFormDownload(await formCall('downloadGeneratedForm',{id,format}));
+}
+function saveFormDownload(result:{fileContent?:unknown;fileName?:string;mimeType?:string}) {
  if(typeof result.fileContent!=='string') throw new Error('Không nhận được nội dung tệp.');
  const bytes=Uint8Array.from(atob(result.fileContent),c=>c.charCodeAt(0));
- const url=URL.createObjectURL(new Blob([bytes],{type:'application/octet-stream'}));
+ const url=URL.createObjectURL(new Blob([bytes],{type:result.mimeType||'application/octet-stream'}));
  const link=document.createElement('a'); link.href=url;link.download=result.fileName || 'phieu';document.body.appendChild(link);link.click();link.remove();
  setTimeout(()=>URL.revokeObjectURL(url),10000);
 }

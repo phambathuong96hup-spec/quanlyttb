@@ -1,0 +1,1 @@
+export const COMPLIANCE_WARNING_DAYS = 45;

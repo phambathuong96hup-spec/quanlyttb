@@ -1,3 +1,4 @@
+import { COMPLIANCE_WARNING_DAYS } from '../utils/compliancePolicy.ts';
 import { useToast } from '../components/ui/Toast';
 import React, { useMemo, useState } from 'react';
 import {
@@ -75,14 +76,7 @@ const resolveInspectionStatus = (
   days: number | null,
   hasExpiryDate: boolean
 ): Pick<InspectionRow, 'statusKind' | 'statusText' | 'badgeVariant' | 'sortRank'> => {
-  if (isSentOrApproved(docStatus)) {
-    return {
-      statusKind: 'sent',
-      statusText: docStatus,
-      badgeVariant: 'success',
-      sortRank: 4,
-    };
-  }
+
 
   if (!hasExpiryDate || days === null) {
     return {
@@ -102,13 +96,17 @@ const resolveInspectionStatus = (
     };
   }
 
-  if (days <= 30) {
+  if (days <= COMPLIANCE_WARNING_DAYS) {
     return {
       statusKind: 'warning',
       statusText: `Còn ${days} ngày`,
       badgeVariant: 'warning',
       sortRank: 1,
     };
+  }
+
+  if (isSentOrApproved(docStatus)) {
+    return { statusKind: 'sent', statusText: docStatus, badgeVariant: 'success', sortRank: 4 };
   }
 
   return {
@@ -139,7 +137,7 @@ const buildInspectionRowFromDocument = (
     licenseNo: cleanText(doc.licenseNo),
     issuedDate: cleanText(doc.issuedDate),
     expiryDate: cleanText(expiryDate),
-    prepTime: cleanText(doc.prepTime),
+    prepTime: String(COMPLIANCE_WARNING_DAYS),
     responsible: cleanText(doc.responsible),
     deptManager: cleanText(doc.deptManager),
     docStatus,
@@ -173,7 +171,7 @@ const buildLegacyInspectionRow = (device: DeviceData, deviceIndex: number): Insp
     licenseNo: cleanText(licenseNo),
     issuedDate: cleanText(issuedDate),
     expiryDate: cleanText(expiryDate),
-    prepTime: cleanText(device['Thời gian  chuẩn bị Hồ sơ'] || device['Thời gian chuẩn bị Hồ sơ']),
+    prepTime: String(COMPLIANCE_WARNING_DAYS),
     responsible: cleanText(device['Người chịu trách nhiệm']),
     deptManager: cleanText(device['Giao quản lý tại khoa']),
     docStatus,
@@ -279,8 +277,8 @@ const Reports: React.FC = () => {
     icon: React.ReactNode;
   }> = [
     { filter: 'all', label: 'Tổng hồ sơ', value: inspectionStats.total, detail: `${devices.length} thiết bị`, tone: 'is-total', icon: <ListChecks size={18} /> },
-    { filter: 'valid', label: 'Còn hạn', value: inspectionStats.valid, detail: '> 30 ngày', tone: 'is-valid', icon: <ShieldCheck size={18} /> },
-    { filter: 'warning', label: 'Cần chuẩn bị', value: inspectionStats.warning, detail: '0 - 30 ngày', tone: 'is-warning', icon: <CalendarClock size={18} /> },
+    { filter: 'valid', label: 'Còn hạn', value: inspectionStats.valid, detail: '> 45 ngày', tone: 'is-valid', icon: <ShieldCheck size={18} /> },
+    { filter: 'warning', label: 'Cần chuẩn bị', value: inspectionStats.warning, detail: '0 - 45 ngày', tone: 'is-warning', icon: <CalendarClock size={18} /> },
     { filter: 'expired', label: 'Hết hạn', value: inspectionStats.expired, detail: 'quá hạn hiệu lực', tone: 'is-expired', icon: <CalendarX2 size={18} /> },
     { filter: 'missing', label: 'Thiếu hồ sơ', value: inspectionStats.missing, detail: 'cần bổ sung', tone: 'is-missing', icon: <ShieldAlert size={18} /> },
     { filter: 'sent', label: 'Đã gửi/duyệt', value: inspectionStats.sent, detail: 'đã xử lý', tone: 'is-sent', icon: <CheckCircle size={18} /> },

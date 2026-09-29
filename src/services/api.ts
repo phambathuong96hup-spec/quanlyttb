@@ -1,3 +1,4 @@
+import { COMPLIANCE_WARNING_DAYS } from '../utils/compliancePolicy.ts';
 import { getAuthPayload, invalidateAuthSession } from '../authSession.ts';
 
 import { parseVietnameseDate } from '../utils/dateUtils.ts';
@@ -362,7 +363,7 @@ export const safeFetch = async (input: RequestInfo, init: SafeFetchOptions = {})
   }
 };
 
-const IDEMPOTENT_ACTIONS = new Set(['reportRepair', 'createTransfer', 'createTransferTypeRequest', 'addDocument', 'renewDocument', 'uploadFormTemplate', 'submitForm']);
+const IDEMPOTENT_ACTIONS = new Set(['reportRepair', 'createTransfer', 'createTransferTypeRequest', 'addDocument', 'renewDocument', 'uploadFormTemplate', 'submitForm', 'createPurchaseRequest']);
 const stablePayload = (value: unknown): unknown => {
   if (value instanceof Date) return value.toISOString();
   if (Array.isArray(value)) return value.map(stablePayload);
@@ -499,7 +500,7 @@ export const fetchDevices = async (): Promise<DeviceData[]> => {
     });
     if (minDaysUntil !== undefined) {
       if (minDaysUntil <= 7) alertLevel = 'danger';
-      else if (minDaysUntil <= 30) alertLevel = 'warning';
+      else if (minDaysUntil <= COMPLIANCE_WARNING_DAYS) alertLevel = 'warning';
     }
 
     return {

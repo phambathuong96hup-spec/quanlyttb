@@ -1,13 +1,14 @@
 import React, { Suspense, lazy } from 'react';
-import { ClipboardPlus, Repeat2, Wrench } from 'lucide-react';
-import { useSearchParams } from 'react-router-dom';
+import { ClipboardPlus, Repeat2, Wrench, ShoppingCart } from 'lucide-react';
+import { Link, useSearchParams } from 'react-router-dom';
 import './Reports.css';
 import './Requests.css';
 
 const RepairRequest = lazy(() => import('./RepairRequest'));
 const Transfers = lazy(() => import('./Transfers'));
+const PurchaseRequest = lazy(() => import('../components/PurchaseRequest'));
 
-type RequestType = 'repair' | 'transfer';
+type RequestType = 'repair' | 'transfer' | 'purchase';
 
 const requestTypes: Array<{
   type: RequestType;
@@ -27,11 +28,12 @@ const requestTypes: Array<{
     description: 'Tạo yêu cầu cho mượn, mượn hoặc trả thiết bị giữa các khoa/phòng.',
     icon: Repeat2,
   },
+  {type:'purchase',label:'Đề nghị mua sắm',description:'Lập đề nghị và tải phiếu DOCX / PDF theo mẫu đơn vị.',icon:ShoppingCart},
 ];
 
 const Requests: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
-  const activeType: RequestType = searchParams.get('type') === 'transfer' ? 'transfer' : 'repair';
+  const activeType: RequestType = searchParams.get('type') === 'purchase' ? 'purchase' : searchParams.get('type') === 'transfer' ? 'transfer' : 'repair';
 
   const selectType = (type: RequestType) => {
     setSearchParams({ type }, { replace: true });
@@ -79,10 +81,11 @@ const Requests: React.FC = () => {
       </div>
 
       <Suspense fallback={<div className="request-loading">Đang tải biểu mẫu...</div>}>
-        {activeType === 'transfer'
+        {activeType === 'purchase' ? <PurchaseRequest/> : activeType === 'transfer'
           ? <Transfers defaultTab="create" />
           : <RepairRequest defaultTab="create" />}
       </Suspense>
+      <p><Link to={`/forms?category=${activeType}`}>Xem phiếu đã lập và tải DOCX / PDF</Link></p>
     </div>
   );
 };

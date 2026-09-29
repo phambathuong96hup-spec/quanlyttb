@@ -28,6 +28,7 @@ function createGasContext() {
   };
 
   const baseContext: Record<string, unknown> = {
+    Session: {getScriptTimeZone: () => 'Asia/Bangkok'},
     console: {
       log: () => {},
       warn: () => {},
@@ -106,6 +107,7 @@ function createGasContext() {
       flush: () => {}
     },
     Utilities: {
+      formatDate: () => '28/09/2026',
       getUuid: () => 'uuid-' + Math.random().toString(36).slice(2, 9),
       computeDigest: (_alg: unknown, val: string) => {
         const bytes = [];

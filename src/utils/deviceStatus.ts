@@ -1,3 +1,4 @@
+import { COMPLIANCE_WARNING_DAYS } from './compliancePolicy.ts';
 import type { DeviceData, DeviceDocument } from '../services/api.ts';
 import { isArchivedDocumentStatus } from './documentWorkflow.ts';
 import { parseFlexibleDate } from './dateUtils.ts';
@@ -34,7 +35,7 @@ export interface DeviceListStatus {
 }
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
-const REGISTRATION_WARNING_DAYS = 30;
+const REGISTRATION_WARNING_DAYS = COMPLIANCE_WARNING_DAYS;
 
 const statusDescriptors: Record<DeviceStatusKind, DeviceListStatus> = {
   expired: {

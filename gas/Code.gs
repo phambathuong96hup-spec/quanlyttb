@@ -14,7 +14,8 @@ const SHEETS = {
   emailOutbox: 'EmailOutbox'
 };
 
-var SCHEMA_VERSION = '2026.09.21.1';
+var SCHEMA_VERSION = '2026.09.28.1';
+var COMPLIANCE_WARNING_DAYS = 45;
 
 const LOG_HEADERS = [
   'Thời gian',
@@ -138,7 +139,7 @@ const DOCUMENT_HEADERS = [
 ];
 
 const USER_HEADERS = ['Tên đăng nhập', 'Mã PIN', 'Quyền hạn', 'Họ và Tên', 'Email', 'Khoa/Phòng', 'Trạng thái'];
-const REPAIR_HEADERS = ['Thời gian', 'Mã Máy/Thiết bị', 'Người báo lỗi', 'Email người báo', 'Tên đăng nhập người báo', 'Khoa/Phòng', 'Mô tả lỗi', 'Trạng Thái', 'Người duyệt', 'Ghi chú xử lý', 'RequestId'];
+const REPAIR_HEADERS = ['Thời gian', 'Mã Máy/Thiết bị', 'Người báo lỗi', 'Email người báo', 'Tên đăng nhập người báo', 'Khoa/Phòng', 'Mô tả lỗi', 'Trạng Thái', 'Người duyệt', 'Ghi chú xử lý', 'RequestId', 'FormSnapshot'];
 const TRANSFER_HEADERS = [
   'TransferId',
   'CreatedAt',
@@ -163,7 +164,8 @@ const TRANSFER_HEADERS = [
   'RejectedAt',
   'RejectReason',
   'UpdatedAt',
-  'RequestId'
+  'RequestId',
+  'FormSnapshot'
 ];
 const GSP_HEADERS = ['date', 'shift', 'tempKho', 'tempTuLanh', 'humidity', 'note', 'recorder'];
 const INVENTORY_RUN_HEADERS = [
@@ -494,6 +496,7 @@ function handleIdempotentAction_(actionName, payload, actor, actionCallback) {
 }
 
 function route_(action, payload) {
+  if (AUTO_FORM_ACTIONS.includes(action)) return autoFormRoute_(action, payload || {});
   if (['listFormTemplates','listSubmittedForms','downloadFormFile','uploadFormTemplate','submitForm','removeFormTemplate'].includes(action)) return formLibraryRoute_(action, payload || {});
   if (action === 'login') return login_(payload);
 
@@ -1045,6 +1048,7 @@ function constantTimeEqual_(left, right) {
 }
 
 function setupSheets() {
+  ensureAutomaticFormSheets_();
   ensureSheet_(SHEETS.devices, DEVICE_HEADERS);
   ensureSheet_(SHEETS.repairs, REPAIR_HEADERS);
   ensureSheet_(SHEETS.transfers, TRANSFER_HEADERS);
@@ -1792,7 +1796,7 @@ function resolveDeviceAggregateStatus_(device, docs) {
   }
 
   const expired = daysList.some(days => days < 0);
-  const warning = !expired && daysList.some(days => days >= 0 && days <= 30);
+  const warning = !expired && daysList.some(days => days >= 0 && days <= COMPLIANCE_WARNING_DAYS);
   const department = normalizeHeader_(device['Nơi đặt thiết bị'] || device.department || '');
   const unassigned = !department || department === 'chuaphanbo';
 
@@ -2260,6 +2264,7 @@ function createTransfer_(payload) {
     RequestedNote: reqNote,
     RequestedAt: now,
     UpdatedAt: now,
+    FormSnapshot: autoFormSnapshot_('transfer', transferId, actor, device, {description:reqNote, from:fromDepartment, to:toDepartment, quantity:payload.quantity || device['Số lượng'] || 1}, now),
     RequestId: payload.requestId || payload.request_id || ''
   });
 
@@ -2320,6 +2325,7 @@ function createTransferTypeRequest_(payload) {
     RequestedNote: reqNote,
     RequestedAt: now,
     UpdatedAt: now,
+    FormSnapshot: autoFormSnapshot_('transfer', transferId, actor, {name:deviceType}, {description:reqNote, from:'Chờ Admin chọn', to:toDepartment, quantity:payload.quantity || 1}, now),
     RequestId: payload.requestId || payload.request_id || ''
   });
 
@@ -2962,6 +2968,7 @@ function reportRepair_(payload, actor) {
       'Khoa/Phòng': payload.actorDepartment || '',
       'Mô tả lỗi': description,
       'Trạng Thái': 'Chờ duyệt',
+      'FormSnapshot': autoFormSnapshot_('repair', requestId, actor, findDeviceById_(cleanDeviceId) || {id:cleanDeviceId}, {description:description}, submittedAt),
       'RequestId': requestId
     });
   } catch (err) {
@@ -4809,7 +4816,6 @@ function checkComplianceDeadlines() {
     
     const expMs = expDate.getTime();
     const daysLeft = Math.ceil((expMs - todayMs) / (24 * 60 * 60 * 1000));
-    const prepDays = parseInt(doc['Thời gian chuẩn bị hồ sơ (ngày)'] || '45', 10) || 45;
     
     let alertType = '';
     let alertLevel = '';
@@ -4823,20 +4829,14 @@ function checkComplianceDeadlines() {
       alertColor = '#b71c1c';
       alertIcon = '🚨';
       order = 1;
-    } else if (daysLeft <= 30) {
-      alertType = 'SẮP ĐẾN HẠN ĐĂNG KIỂM (≤ 30 ngày)';
+    } else if (daysLeft <= COMPLIANCE_WARNING_DAYS) {
+      alertType = 'SẮP ĐẾN HẠN ĐĂNG KIỂM (≤ 45 ngày)';
       if (daysLeft <= 1) { alertLevel = 'KHẨN CẤP - Còn ' + daysLeft + ' ngày'; alertColor = '#d32f2f'; alertIcon = '🔴'; }
       else if (daysLeft <= 3) { alertLevel = 'RẤT GẤP - Còn ' + daysLeft + ' ngày'; alertColor = '#e65100'; alertIcon = '🟠'; }
       else if (daysLeft <= 7) { alertLevel = 'GẤP - Còn ' + daysLeft + ' ngày'; alertColor = '#ef6c00'; alertIcon = '🟡'; }
       else if (daysLeft <= 15) { alertLevel = 'Cảnh báo - Còn ' + daysLeft + ' ngày'; alertColor = '#f9a825'; alertIcon = '⚠️'; }
       else { alertLevel = 'Nhắc nhở - Còn ' + daysLeft + ' ngày'; alertColor = '#1565c0'; alertIcon = '📋'; }
       order = 2;
-    } else if (daysLeft <= prepDays) {
-      alertType = 'CẦN CHUẨN BỊ HỒ SƠ';
-      alertLevel = 'Còn ' + daysLeft + ' ngày (Hạn nộp trước ' + prepDays + ' ngày)';
-      alertColor = '#1565c0';
-      alertIcon = '📝';
-      order = 3;
     } else {
       return; // Chưa đến hạn cảnh báo
     }
@@ -5252,10 +5252,300 @@ const FORM_TYPES = {repair:true,transfer:true,purchase:true};
 const FORM_MIME = {pdf:'application/pdf',docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'};
 const FORM_MAX_BYTES = 8 * 1024 * 1024;
 
+// Automatic output is separate from manual submissions. Source snapshots are committed
+// in the business row; a worker can recover even if the browser never receives a response.
+const AUTO_FORM_ACTIONS = ['listGeneratedForms','downloadGeneratedForm','retryGeneratedForm','getAutoFormSettings','previewAutoFormTemplate','activateAutoFormTemplate','createPurchaseRequest'];
+const AUTO_FORM_HEADERS = ['Id','Kind','Category','Owner','Title','CreatedAt','Snapshot','Status','Attempts','RunId','LeaseUntil','DocxId','PdfId','Error','UpdatedAt'];
+const AUTO_FORM_FIELDS = ['request.code','request.date','request.description','requester.name','requester.username','department.name','device.id','device.name','device.model','device.serial','device.department','transfer.from','transfer.to','request.quantity','request.unit','purchase.specification','purchase.estimatedCost','purchase.fundingSource'];
+const AUTO_FORM_REQUIRED = ['request.code','request.date','requester.name','department.name','device.name','request.description'];
+
+function ensureAutomaticFormSheets_() {
+  ensureSheet_('GeneratedForms', AUTO_FORM_HEADERS);
+  ensureSheet_('PurchaseRequests', ['Id','RequestId','Owner','CreatedAt','FormSnapshot']);
+  ensureSheet_('FormTemplates', FORM_HEADERS);
+}
+
+function configuredAutoTemplate_(category) {
+  const raw=PropertiesService.getScriptProperties().getProperty('AUTO_FORM_TEMPLATE_'+category);
+  if (!raw) return null;
+  let value;
+  try {value=JSON.parse(raw);} catch (_) {return null;}
+  return value && value.id && value.fileId && activeFormTemplates_().some(t=>t.Id===value.id && t.FileId===value.fileId && t.Category===category) ? value : null;
+}
+
+function autoFormSnapshot_(category, code, actor, device, detail, now) {
+  device=device||{}; detail=detail||{};
+  const values={
+    'request.code':String(code), 'request.date':Utilities.formatDate(now,Session.getScriptTimeZone()||'Asia/Bangkok','dd/MM/yyyy'),
+    'request.description':String(detail.description||''), 'requester.name':userDisplayName_(actor),
+    'requester.username':userUsername_(actor), 'department.name':userDepartment_(actor),
+    'device.id':String(device.id||''), 'device.name':String(device['Tên Thiết bị']||device.name||''),
+    'device.model':String(device.Model||device.model||device['Model/Ký hiệu']||''),
+    'device.serial':String(device['Seri Máy']||device.serial||''),
+    'device.department':String(device['Nơi đặt thiết bị']||device.department||''),
+    'transfer.from':String(detail.from||''),'transfer.to':String(detail.to||''),
+    'request.quantity':String(detail.quantity||1),'request.unit':String(detail.unit||device['Đơn vị tính']||device.unit||''),
+    'purchase.specification':String(detail.specification||''),'purchase.estimatedCost':String(detail.estimatedCost||''),
+    'purchase.fundingSource':String(detail.fundingSource||'')
+  };
+  const snapshot={version:1,category:category,code:String(code),owner:userUsername_(actor),createdAt:now.toISOString(),template:configuredAutoTemplate_(category),values:values};
+  const json=JSON.stringify(snapshot);
+  if (json.length>45000) throw new Error('Nội dung phiếu vượt giới hạn 45.000 ký tự.');
+  return json;
+}
+
+function automaticFormRow_(id, kind, snapshot) {
+  return {Id:id,Kind:kind,Category:snapshot.category,Owner:snapshot.owner,Title:(kind==='preview'?'Bản thử mẫu — ':'Phiếu đề nghị — ')+snapshot.values['device.name'],CreatedAt:snapshot.createdAt,Snapshot:JSON.stringify(snapshot),Status:snapshot.template?'PENDING':'BLOCKED_TEMPLATE',Attempts:0,RunId:'',LeaseUntil:'',DocxId:'',PdfId:'',Error:snapshot.template?'':'Admin chưa kích hoạt mẫu DOCX cho loại phiếu này.',UpdatedAt:new Date().toISOString()};
+}
+
+function discoverAutomaticForms_() {
+  return withDeviceMutationLock_(function() {
+    const known=new Set(getRows_('GeneratedForms').map(r=>String(r.Id)));
+    [SHEETS.repairs,SHEETS.transfers,'PurchaseRequests'].forEach(sheet=>{
+      getRows_(sheet).forEach(row=>{
+        if (!row.FormSnapshot) return; // Do not manufacture historical proposals.
+        try {
+          const s=JSON.parse(row.FormSnapshot);
+          if (s.version!==1 || !s.owner || !s.code || !FORM_TYPES[s.category]) return;
+          const id=JSON.stringify([s.category,s.owner,s.code]);
+          if (known.has(id)) return;
+          appendObject_('GeneratedForms',automaticFormRow_(id,'request',s));
+          known.add(id);
+        } catch (error) {console.error('Không thể đối soát phiếu tự động trong '+sheet+': '+error.message);}
+      });
+    });
+  });
+}
+
+function claimAutomaticForm_() {
+  const claimed=withDeviceMutationLock_(function() {
+    const now=Date.now();
+    const entry=getRowsWithRowIndex_('GeneratedForms').find(e=>{
+      const r=e.data;
+      return Number(r.Attempts||0)<3 && (r.Status==='PENDING' || r.Status==='ERROR' || (r.Status==='PROCESSING' && Date.parse(r.LeaseUntil)<now));
+    });
+    if (!entry) return null;
+    const patch={Status:'PROCESSING',Attempts:Number(entry.data.Attempts||0)+1,RunId:Utilities.getUuid(),LeaseUntil:new Date(now+10*60*1000).toISOString(),UpdatedAt:new Date(now).toISOString(),Error:''};
+    updateRowByObject_('GeneratedForms',entry.rowIndex,patch);
+    return Object.assign({},entry.data,patch);
+  });
+  return claimed && claimed.Id ? claimed : null;
+}
+
+function finishAutomaticForm_(job, files, error) {
+  if (!error && (!files || !files.docxId || !files.pdfId)) return false;
+  return withDeviceMutationLock_(function() {
+    const e=getRowsWithRowIndex_('GeneratedForms').find(e=>e.data.Id===job.Id);
+    if (!e || e.data.RunId!==job.RunId || e.data.Status!=='PROCESSING') return false;
+    updateRowByObject_('GeneratedForms',e.rowIndex,error
+      ? {Status:'ERROR',Error:error.autoFormSafeMessage||'Không tạo được phiếu. Admin kiểm tra mẫu, quyền Drive và nhật ký tác vụ; sau đó chọn Tạo lại.',LeaseUntil:'',UpdatedAt:new Date().toISOString()}
+      : {Status:'READY',DocxId:files.docxId,PdfId:files.pdfId,Error:'',LeaseUntil:'',UpdatedAt:new Date().toISOString()});
+    return true;
+  }) === true;
+}
+
+function processAutomaticForms() {
+  if(!ensureSchemaVersion_()) return {processed:0,success:false,message:'Chưa cập nhật cấu trúc dữ liệu.'};
+  discoverAutomaticForms_();
+  // One conversion per invocation keeps runtime bounded and leaves request locks free.
+  const job=claimAutomaticForm_();
+  if (!job) return {processed:0};
+  let files;
+  try { files=renderAutomaticForm_(job); }
+  catch(error) {
+    console.error('Phiếu '+job.Id+' / '+job.RunId+': '+error.message);
+    finishAutomaticForm_(job,null,error);
+    return {processed:1,success:false};
+  }
+  // If this write is ambiguous, keep both private artifacts for reconciliation.
+  return {processed:1,success:finishAutomaticForm_(job,files,null)};
+}
+
+function setupAutomaticFormsTrigger() {
+  if (!ensureSchemaVersion_(true)) throw new Error('Chưa hoàn tất cập nhật cấu trúc dữ liệu.');
+  formVaultFolder_();
+  const existing=ScriptApp.getProjectTriggers().filter(t=>t.getHandlerFunction()==='processAutomaticForms');
+  if (existing.length) return {installed:true,alreadyExisted:true};
+  const trigger=ScriptApp.newTrigger('processAutomaticForms').timeBased().everyMinutes(1).create();
+  return {installed:true,triggerId:trigger.getUniqueId()};
+}
+
+function validateAutoFormTokens_(text, category) {
+  const tokens=Array.from(String(text).matchAll(/\{\{([^{}]+)\}\}/g),m=>m[1]);
+  const unknown=tokens.filter(t=>!AUTO_FORM_FIELDS.includes(t));
+  if (unknown.length) throw autoFormInputError_('Trường mẫu không hỗ trợ: '+Array.from(new Set(unknown)).join(', '));
+  const required=AUTO_FORM_REQUIRED.concat(category==='transfer'?['transfer.from','transfer.to']:category==='purchase'?['request.quantity','request.unit']:[]);
+  const missing=required.filter(t=>!tokens.includes(t));
+  if (missing.length) throw autoFormInputError_('Mẫu thiếu trường: '+missing.join(', '));
+  const remainder=String(text).replace(/\{\{[^{}]+\}\}/g,'');
+  if (remainder.includes('{{') || remainder.includes('}}')) throw autoFormInputError_('Trường mẫu bị ngắt hoặc sai dấu ngoặc.');
+}
+
+function autoFormInputError_(message) {
+  const error=new Error(message);
+  error.autoFormSafeMessage=String(message).slice(0,500);
+  return error;
+}
+
+function validateAutoFormValues_(snapshot) {
+  const labels={'request.code':'mã phiếu','request.date':'ngày lập','requester.name':'người lập','department.name':'khoa/phòng','device.name':'tên thiết bị','request.description':'nội dung đề nghị'};
+  const missing=Object.keys(labels).filter(key=>!String(snapshot.values[key]||'').trim());
+  if(missing.length) throw autoFormInputError_('Dữ liệu yêu cầu thiếu '+missing.map(key=>labels[key]).join(', ')+'. Admin cần đối soát yêu cầu đã lưu.');
+}
+
+function fillAutoFormSection_(section, values) {
+  // Replace by offsets in reverse order: user text is literal, never regex replacement
+  // syntax, and inserted {{...}} is never expanded as another template token.
+  const text=section.editAsText();
+  const matches=Array.from(text.getText().matchAll(/\{\{([^{}]+)\}\}/g));
+  matches.reverse().forEach(match=>{
+    const start=match.index, end=start+match[0].length-1;
+    const attributes=text.getAttributes(start);
+    const value=String(values[match[1]]||'—');
+    text.deleteText(start,end);
+    text.insertText(start,value);
+    text.setAttributes(start,start+value.length-1,attributes);
+  });
+}
+
+function exportAutomaticBlob_(id, format) {
+  const response=UrlFetchApp.fetch('https://www.googleapis.com/drive/v3/files/'+encodeURIComponent(id)+'/export?mimeType='+encodeURIComponent(FORM_MIME[format]),{
+    headers:{Authorization:'Bearer '+ScriptApp.getOAuthToken()},muteHttpExceptions:true
+  });
+  if(response.getResponseCode()!==200) throw new Error('Drive export HTTP '+response.getResponseCode());
+  const blob=response.getBlob(); const bytes=blob.getBytes();
+  if(!bytes.length || bytes.length>FORM_MAX_BYTES) throw new Error('Tệp xuất rỗng hoặc vượt 8 MB.');
+  const signature=bytes.slice(0,4).map(b=>(b+256)%256).join(',');
+  if(signature!==(format==='pdf'?'37,80,68,70':'80,75,3,4')) throw new Error('Drive trả về sai định dạng tệp.');
+  return blob.setContentType(FORM_MIME[format]);
+}
+
+function renderAutomaticForm_(job) {
+  const s=JSON.parse(job.Snapshot);
+  validateAutoFormValues_(s);
+  if(!s.template || !s.template.fileId) throw new Error('Thiếu mẫu DOCX.');
+  const folder=formVaultFolder_();
+  const source=DriveApp.getFileById(s.template.fileId);
+  if(source.getSize()>5*1024*1024) throw autoFormInputError_('Mẫu tự điền tối đa 5 MB. Admin cần đăng mẫu nhỏ hơn.');
+  const input=source.getBlob().setContentType(FORM_MIME.docx);
+  let convertedId=''; const created=[];
+  try {
+    const converted=Drive.Files.create({name:'AUTO-'+job.RunId,mimeType:'application/vnd.google-apps.document',parents:[folder.getId()]},input,{fields:'id'});
+    convertedId=converted.id;
+    assertFormVaultPrivate_(DriveApp.getFileById(convertedId));
+    const document=DocumentApp.openById(convertedId);
+    const sections=[document.getBody(),document.getHeader(),document.getFooter()].filter(Boolean);
+    validateAutoFormTokens_(sections.map(p=>p.getText()).join('\n'),s.category);
+    sections.forEach(section=>fillAutoFormSection_(section,s.values));
+    document.saveAndClose();
+    const result={};
+    ['docx','pdf'].forEach(format=>{
+      const blob=exportAutomaticBlob_(convertedId,format).setName('Phieu-'+job.RunId+'.'+format);
+      const file=folder.createFile(blob);created.push(file);
+      assertFormVaultPrivate_(file);
+      result[format+'Id']=file.getId();
+    });
+    return result;
+  } catch(error) {
+    // No result was published, so cleanup these known partial artifacts only.
+    created.forEach(f=>{try{f.setTrashed(true);}catch(_){}});
+    throw error;
+  } finally {
+    if(convertedId) {try{DriveApp.getFileById(convertedId).setTrashed(true);}catch(_){}}
+  }
+}
+
+function autoFormPublic_(r) {
+  const s=JSON.parse(r.Snapshot);
+  return {id:r.Id,category:r.Category,title:r.Title,owner:r.Owner,senderName:s.values['requester.name'],department:s.values['department.name'],createdAt:r.CreatedAt,status:r.Status,attempts:Number(r.Attempts||0),error:r.Error||'',code:s.code,templateTitle:s.template?s.template.title:'Chưa có mẫu',templateId:s.template?s.template.id:'',ready:r.Status==='READY'&&!!r.DocxId&&!!r.PdfId};
+}
+
+function autoFormRoute_(action,payload) {
+  const actor=requireAuthenticated_(payload);
+  if(!actor || !userUsername_(actor)) return authError_();
+  const admin=isAdmin_(actor),owner=userUsername_(actor);
+  if(['getAutoFormSettings','previewAutoFormTemplate','activateAutoFormTemplate'].includes(action) && !admin) return {success:false,message:'Chỉ Admin được quản lý mẫu tự điền.'};
+  try {
+    if(!ensureSchemaVersion_()) return {success:false,message:'Chưa cập nhật cấu trúc dữ liệu. Admin cần chạy migrateSchema.'};
+    if(action==='createPurchaseRequest') {
+      const requestId=String(payload.requestId||'').trim(), name=String(payload.deviceName||'').trim(), description=String(payload.description||'').trim();
+      const quantity=Number(payload.quantity),unit=String(payload.unit||'').trim();
+      if(!/^[a-zA-Z0-9_:/-]{1,150}$/.test(requestId) || !name || name.length>200 || !description || description.length>10000 || !Number.isInteger(quantity) || quantity<1 || quantity>100000 || !unit || unit.length>30) return {success:false,message:'Nhập tên thiết bị, lý do, số lượng nguyên dương và đơn vị tính hợp lệ.'};
+      const detail={description:description,quantity:quantity,unit:unit,specification:String(payload.specification||''),estimatedCost:String(payload.estimatedCost||''),fundingSource:String(payload.fundingSource||'')};
+      if(detail.specification.length>10000 || detail.estimatedCost.length>100 || detail.fundingSource.length>500) return {success:false,message:'Nội dung đề nghị mua sắm quá dài.'};
+      return withDeviceMutationLock_(function() {
+        const previous=getRows_('PurchaseRequests').find(r=>r.RequestId===requestId && normalize_(r.Owner)===normalize_(owner));
+        if(previous) {
+          const old=JSON.parse(previous.FormSnapshot).values;
+          const fields={'device.name':name,'request.description':description,'request.quantity':String(quantity),'request.unit':unit,'purchase.specification':detail.specification,'purchase.estimatedCost':detail.estimatedCost,'purchase.fundingSource':detail.fundingSource};
+          if(Object.keys(fields).some(key=>String(old[key]||'')!==fields[key])) return {success:false,message:'Mã yêu cầu đã được dùng cho nội dung khác. Hãy tải lại danh sách để kiểm tra.'};
+          return {success:true,id:previous.Id};
+        }
+        const id='MS-'+Utilities.getUuid(),now=new Date();
+        const snapshot=autoFormSnapshot_('purchase',id,actor,{name:name},detail,now);
+        appendObject_('PurchaseRequests',{Id:id,RequestId:requestId,Owner:owner,CreatedAt:now.toISOString(),FormSnapshot:snapshot});
+        return {success:true,id:id,message:'Đã lưu đề nghị mua sắm. Phiếu được tạo nền; xem tại Mẫu và phiếu.'};
+      });
+    }
+    if(action==='listGeneratedForms') {
+      discoverAutomaticForms_();
+      return {success:true,data:getRows_('GeneratedForms').filter(r=>r.Kind==='request' && (admin || normalize_(r.Owner)===normalize_(owner))).map(autoFormPublic_)};
+    }
+    if(action==='getAutoFormSettings') {
+      const jobs=getRows_('GeneratedForms');
+      return {success:true,data:activeFormTemplates_().map(t=>{
+        const configured=configuredAutoTemplate_(t.Category),preview=jobs.find(j=>j.Id==='preview:'+t.Id);
+        return {id:t.Id,title:t.Title,category:t.Category,active:!!configured && configured.id===t.Id,preview:preview?autoFormPublic_(preview):null,eligible:t.MimeType===FORM_MIME.docx};
+      })};
+    }
+    if(action==='previewAutoFormTemplate' || action==='activateAutoFormTemplate') {
+      return withDeviceMutationLock_(function() {
+        const t=activeFormTemplates_().find(t=>String(t.Id)===String(payload.id));
+        if(!t || t.MimeType!==FORM_MIME.docx) return {success:false,message:'Chọn mẫu DOCX đang hoạt động.'};
+        const id='preview:'+t.Id,existing=getRowsWithRowIndex_('GeneratedForms').find(e=>e.data.Id===id);
+        if(action==='activateAutoFormTemplate') {
+          if(!existing || existing.data.Status!=='READY' || !existing.data.DocxId || !existing.data.PdfId || payload.confirmPreview!==true) return {success:false,message:'Tạo và kiểm tra cả hai bản thử trước khi kích hoạt mẫu.'};
+          PropertiesService.getScriptProperties().setProperty('AUTO_FORM_TEMPLATE_'+t.Category,JSON.stringify({id:t.Id,fileId:t.FileId,title:t.Title}));
+          return {success:true,message:'Đã kích hoạt mẫu cho yêu cầu mới.'};
+        }
+        if(existing) return {success:true,id:id};
+        const s=JSON.parse(autoFormSnapshot_(t.Category,'BAN-THU-001',actor,{id:'TB-THU',name:'Máy theo dõi bệnh nhân — mẫu thử tên thiết bị dài',model:'Model thử',serial:'SN-THU',department:'Khoa Hồi sức tích cực'},{description:'DỮ LIỆU THỬ — KHÔNG PHẢI PHIẾU THẬT\nKiểm tra tiếng Việt, xuống dòng và bố cục khi in.',from:'Khoa Nhi',to:'Khoa Hồi sức tích cực',quantity:2,specification:'Thông số kỹ thuật mẫu'},new Date()));
+        s.values['requester.name']='Nguyễn Thị Ánh — dữ liệu thử';
+        s.values['department.name']='Khoa Hồi sức tích cực — dữ liệu thử';
+        s.values['request.unit']='cái';
+        s.template={id:t.Id,fileId:t.FileId,title:t.Title};
+        appendObject_('GeneratedForms',automaticFormRow_(id,'preview',s));
+        return {success:true,id:id,message:'Đã xếp hàng tạo bản thử. Tải lại sau khi tác vụ nền chạy.'};
+      });
+    }
+    const found=getRowsWithRowIndex_('GeneratedForms').find(e=>String(e.data.Id)===String(payload.id));
+    if(!found || (!admin && (found.data.Kind==='preview' || normalize_(found.data.Owner)!==normalize_(owner)))) return {success:false,message:'Không tìm thấy phiếu hoặc bạn không có quyền.'};
+    if(action==='downloadGeneratedForm') {
+      if(!['docx','pdf'].includes(payload.format) || found.data.Status!=='READY' || !found.data.DocxId || !found.data.PdfId) return {success:false,message:'Phiếu chưa sẵn sàng hoặc định dạng không hợp lệ.'};
+      const bytes=DriveApp.getFileById(payload.format==='docx'?found.data.DocxId:found.data.PdfId).getBlob().getBytes();
+      if(bytes.length>FORM_MAX_BYTES) return {success:false,message:'Tệp vượt 8 MB.'};
+      const code=JSON.parse(found.data.Snapshot).code.replace(/[^a-zA-Z0-9_-]/g,'_').slice(0,100);
+      return {success:true,fileName:'Phieu-'+code+'.'+payload.format,mimeType:FORM_MIME[payload.format],fileContent:Utilities.base64Encode(bytes)};
+    }
+    if(action==='retryGeneratedForm') return withDeviceMutationLock_(function() {
+      const fresh=getRowsWithRowIndex_('GeneratedForms').find(e=>e.data.Id===found.data.Id);
+      if(!fresh) return {success:false,message:'Không tìm thấy phiếu.'};
+      if(fresh.data.Status==='READY' || fresh.data.Status==='PENDING') return {success:true};
+      if(fresh.data.Status==='PROCESSING' && Date.parse(fresh.data.LeaseUntil)>Date.now()) return {success:false,message:'Phiếu đang được tạo, vui lòng chờ.'};
+      const s=JSON.parse(fresh.data.Snapshot);
+      if(!s.template) s.template=configuredAutoTemplate_(s.category);
+      if(!s.template) return {success:false,message:'Admin cần kích hoạt mẫu DOCX trước.'};
+      updateRowByObject_('GeneratedForms',fresh.rowIndex,{Snapshot:JSON.stringify(s),Status:'PENDING',Attempts:0,RunId:'',LeaseUntil:'',Error:'',UpdatedAt:new Date().toISOString()});
+      return {success:true,message:'Đã xếp hàng tạo lại phiếu từ dữ liệu đã lưu.'};
+    });
+    return {success:false,message:'Thao tác không hợp lệ.'};
+  } catch(error) {console.error('Automatic form action '+action+': '+error.message);return {success:false,message:'Không thể xử lý phiếu. Hãy tải lại để kiểm tra; nếu lỗi tiếp diễn, liên hệ Admin.'};}
+}
+
 function activeFormTemplates_() {
   const rows=getRows_('FormTemplates');
   const replaced=rows.map(r=>String(r.ReplacesId||''));
-  return rows.filter(r=>String(r.Active)!=='false' && !replaced.includes(String(r.Id)));
+  return rows.filter(r=>String(r.Active).trim().toLowerCase()!=='false' && !replaced.includes(String(r.Id)));
 }
 
 function formPublicRow_(r) {
@@ -5298,8 +5588,11 @@ function assertFormVaultPrivate_(folder) {
 }
 
 function formVaultFolder_() {
-  const folderId=PropertiesService.getScriptProperties().getProperty('FORM_VAULT_FOLDER_ID');
-  if(!folderId) throw new Error('Admin cần cấu hình thư mục lưu mẫu và phiếu trước khi tải lên.');
+  const configured=String(PropertiesService.getScriptProperties().getProperty('FORM_VAULT_FOLDER_ID')||'').trim();
+  if(!configured) throw new Error('Admin cần cấu hình thư mục lưu mẫu và phiếu trước khi tải lên.');
+  const match=configured.match(/^(?:https:\/\/drive\.google\.com\/drive\/(?:u\/\d+\/)?folders\/)?([A-Za-z0-9_-]+)\/?(?:[?#][^\s]*)?$/);
+  if(!match) throw new Error('FORM_VAULT_FOLDER_ID phải là ID hoặc đường dẫn thư mục https://drive.google.com/drive/folders/...');
+  const folderId=match[1];
   const folder=DriveApp.getFolderById(folderId);
   assertFormVaultPrivate_(folder);
   return folder;

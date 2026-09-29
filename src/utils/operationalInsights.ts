@@ -1,3 +1,4 @@
+import { COMPLIANCE_WARNING_DAYS } from './compliancePolicy.ts';
 import type { DeviceData, DeviceDocument, RepairData, TransferData } from '../services/api';
 import { parseFlexibleDate } from './dateUtils.ts';
 import { isArchivedDocumentStatus } from './documentWorkflow.ts';
@@ -93,10 +94,7 @@ const isSentOrApproved = (status: string) => {
   return normalized.includes('da gui') || normalized.includes('da phe duyet');
 };
 
-const parsePrepDays = (value: string) => {
-  const match = value.match(/\d+/);
-  return match ? Number(match[0]) : 30;
-};
+const parsePrepDays = () => COMPLIANCE_WARNING_DAYS;
 
 const makeTaskKey = (deviceId: string, docType: string, licenseNo: string, expiryDate: string, index: string | number) => {
   return [deviceId, docType, licenseNo, expiryDate, index]
@@ -109,14 +107,7 @@ const resolveCompliance = (
   expiryDate: string,
   daysUntilExpiry: number | null
 ): Pick<InspectionItem, 'statusKind' | 'statusText' | 'priority' | 'needsAction'> => {
-  if (isSentOrApproved(docStatus)) {
-    return {
-      statusKind: 'sent',
-      statusText: docStatus,
-      priority: 'low',
-      needsAction: false,
-    };
-  }
+
 
   if (!expiryDate || daysUntilExpiry === null) {
     return {
@@ -136,12 +127,21 @@ const resolveCompliance = (
     };
   }
 
-  if (daysUntilExpiry <= 30) {
+  if (daysUntilExpiry <= COMPLIANCE_WARNING_DAYS) {
     return {
       statusKind: 'warning',
       statusText: `Còn ${daysUntilExpiry} ngày`,
       priority: 'high',
       needsAction: true,
+    };
+  }
+
+  if (isSentOrApproved(docStatus)) {
+    return {
+      statusKind: 'sent',
+      statusText: docStatus,
+      priority: 'low',
+      needsAction: false,
     };
   }
 
@@ -164,7 +164,7 @@ const buildDocumentInspectionItem = (
   const licenseNo = cleanText(doc.licenseNo);
   const issuedDate = cleanText(doc.issuedDate, '');
   const expiryDate = cleanText(doc.expiryDate, '');
-  const prepTime = cleanText(doc.prepTime, '30');
+  const prepTime = String(COMPLIANCE_WARNING_DAYS);
   const daysUntilExpiry = typeof doc.daysUntilExpiry === 'number'
     ? doc.daysUntilExpiry
     : daysFromToday(expiryDate, today);
@@ -183,7 +183,7 @@ const buildDocumentInspectionItem = (
     prepTime,
     responsible: cleanText(doc.responsible),
     daysUntilExpiry,
-    prepDays: parsePrepDays(prepTime),
+    prepDays: parsePrepDays(),
     ...compliance,
   };
 };
@@ -199,7 +199,7 @@ const buildLegacyInspectionItem = (device: DeviceData, index: number, today: Dat
   const hasLegacyInspectionData = Boolean(issuedDate || expiryDate || licenseNo || rawDocStatus);
   if (!hasLegacyInspectionData) return null;
 
-  const prepTime = cleanText(device['Thời gian  chuẩn bị Hồ sơ'] || device['Thời gian chuẩn bị Hồ sơ'], '30');
+  const prepTime = String(COMPLIANCE_WARNING_DAYS);
   const docStatus = rawDocStatus || 'Chưa gửi';
   const daysUntilExpiry = daysFromToday(expiryDate, today);
   const compliance = resolveCompliance(docStatus, expiryDate, daysUntilExpiry);
@@ -216,7 +216,7 @@ const buildLegacyInspectionItem = (device: DeviceData, index: number, today: Dat
     prepTime,
     responsible: cleanText(device['Người chịu trách nhiệm']),
     daysUntilExpiry,
-    prepDays: parsePrepDays(prepTime),
+    prepDays: parsePrepDays(),
     ...compliance,
   };
 };

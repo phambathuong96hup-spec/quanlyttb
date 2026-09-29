@@ -1,3 +1,4 @@
+import { COMPLIANCE_WARNING_DAYS } from '../utils/compliancePolicy.ts';
 import { useToast } from '../components/ui/Toast';
 import React, { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -289,7 +290,7 @@ const DeviceProfile: React.FC = () => {
       setLicenseNo(doc.licenseNo || '');
       setIssuedDate(formatDateToYYYYMMDD(doc.issuedDate || ''));
       setExpiryDate(formatDateToYYYYMMDD(doc.expiryDate || ''));
-      setPrepTime(doc.prepTime || '');
+      setPrepTime(String(COMPLIANCE_WARNING_DAYS));
       setDocStatus(doc.status || 'Chưa gửi');
       setSentDate(formatDateToYYYYMMDD(doc.sentDate || ''));
       setResponsible(doc.responsible || '');
@@ -300,7 +301,7 @@ const DeviceProfile: React.FC = () => {
       setLicenseNo('');
       setIssuedDate(getTodayInputDate());
       setExpiryDate('');
-      setPrepTime(doc.prepTime || '');
+      setPrepTime(String(COMPLIANCE_WARNING_DAYS));
       setDocStatus('Đã phê duyệt');
       setSentDate(formatDateToYYYYMMDD(doc.sentDate || ''));
       setResponsible(doc.responsible || '');
@@ -312,7 +313,7 @@ const DeviceProfile: React.FC = () => {
       setLicenseNo('');
       setIssuedDate('');
       setExpiryDate('');
-      setPrepTime('');
+      setPrepTime(String(COMPLIANCE_WARNING_DAYS));
       setDocStatus('Chưa gửi');
       setSentDate('');
       setResponsible('');
@@ -517,7 +518,7 @@ const DeviceProfile: React.FC = () => {
                 if (days !== null) {
                   if (days < 0) { badgeVariant = 'danger'; daysText = `Quá hạn ${Math.abs(days)} ngày`; }
                   else if (days <= 7) { badgeVariant = 'danger'; daysText = `Còn ${days} ngày`; }
-                  else if (days <= 30) { badgeVariant = 'warning'; daysText = `Còn ${days} ngày`; }
+                  else if (days <= COMPLIANCE_WARNING_DAYS) { badgeVariant = 'warning'; daysText = `Còn ${days} ngày`; }
                   else { badgeVariant = 'success'; daysText = `Còn ${days} ngày`; }
                 }
                 return (
@@ -529,7 +530,7 @@ const DeviceProfile: React.FC = () => {
                       {doc.expiryDate || '—'}
                       {daysText && <div><Badge variant={badgeVariant}>{daysText}</Badge></div>}
                     </TableCell>
-                    <TableCell>{doc.prepTime ? `${doc.prepTime} ngày` : '—'}</TableCell>
+                    <TableCell>{`${COMPLIANCE_WARNING_DAYS} ngày`}</TableCell>
                     <TableCell>
                       <Badge variant={doc.status === 'Đã gửi' || doc.status === 'Đã phê duyệt' ? 'success' : doc.status === 'Đang xử lý' ? 'warning' : 'neutral'}>
                         {doc.status || 'Chưa gửi'}
@@ -781,9 +782,9 @@ const DeviceProfile: React.FC = () => {
                 <input 
                   id="document-preparation-days"
                   type="number" 
-                  value={prepTime} 
-                  onChange={e => setPrepTime(e.target.value)} 
-                  placeholder="VD: 30"
+                  value={COMPLIANCE_WARNING_DAYS}
+                  readOnly
+                  placeholder="45"
                   style={{ width: '100%', padding: '10px 14px', border: '1.5px solid var(--border)', borderRadius: '8px', fontSize: '0.95rem', boxSizing: 'border-box' }}
                 />
               </div>

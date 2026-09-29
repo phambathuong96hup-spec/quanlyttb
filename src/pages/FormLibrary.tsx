@@ -1,14 +1,17 @@
 import { useEffect, useState } from 'react';
 import { FileText, Download, Upload, RefreshCw, Trash2 } from 'lucide-react';
 import { useAuth } from '../authContext';
+import { Link, useSearchParams } from 'react-router-dom';
+import AutomaticForms from '../components/AutomaticForms';
 import { downloadForm, formAccept, formCall, formCategories, formFilePayload, listForms, type FormCategory, type FormRecord } from '../services/formLibrary';
 import './FormLibrary.css';
 
 export default function FormLibrary() {
+ const [searchParams]=useSearchParams();
  const { role }=useAuth(); const admin=role.toLowerCase()==='admin';
  const [templates,setTemplates]=useState<FormRecord[]>([]); const [submissions,setSubmissions]=useState<FormRecord[]>([]);
  const [loading,setLoading]=useState(true);const [busy,setBusy]=useState(false);const [error,setError]=useState('');const [notice,setNotice]=useState('');
- const [category,setCategory]=useState<FormCategory>('transfer');const [query,setQuery]=useState('');
+ const [category,setCategory]=useState<FormCategory>(()=>{const value=searchParams.get('category');return value==='repair'||value==='purchase'?value:'transfer';});const [query,setQuery]=useState('');
  const [selected,setSelected]=useState<FormRecord|null>(null);const [title,setTitle]=useState('');const [file,setFile]=useState<File|null>(null);
  const [templateTitle,setTemplateTitle]=useState('');const [templateFile,setTemplateFile]=useState<File|null>(null);const [replace,setReplace]=useState<FormRecord|null>(null);
  const [removing,setRemoving]=useState<FormRecord|null>(null);const [inputKey,setInputKey]=useState(0);
@@ -32,9 +35,11 @@ export default function FormLibrary() {
  const matches=submissions.filter(r=>r.category===category && `${r.title} ${r.senderName} ${r.department}`.toLocaleLowerCase('vi').includes(query.toLocaleLowerCase('vi')));
  const date=(value:string)=>{const d=new Date(value);return Number.isNaN(d.getTime())?value:d.toLocaleString('vi-VN');};
  return <div className="form-library">
-  <header className="fl-heading"><div><span className="fl-eyebrow">HỒ SƠ NGHIỆP VỤ</span><h1>Mẫu và phiếu</h1><p>Tải mẫu của đơn vị, điền thông tin và gửi lại phiếu hoàn thành.</p></div><button disabled={busy||loading} onClick={()=>void reload()}><RefreshCw size={16}/>Tải lại</button></header>
+  <header className="fl-heading"><div><span className="fl-eyebrow">HỒ SƠ NGHIỆP VỤ</span><h1>Mẫu và phiếu</h1><p>Tải phiếu tự động từ yêu cầu hoặc sử dụng mẫu của đơn vị.</p></div><button disabled={busy||loading} onClick={()=>{setInputKey(k=>k+1);void reload();}}><RefreshCw size={16}/>Tải lại</button></header>
   <div className="fl-categories" aria-label="Loại biểu mẫu">{Object.entries(formCategories).map(([key,label])=><button key={key} aria-pressed={category===key} disabled={busy} onClick={()=>{setCategory(key as FormCategory);setSelected(null);setReplace(null);setTemplateTitle('');}}>{label}</button>)}</div>
   {error&&<div role="alert" className="fl-error">{error}</div>}{notice&&<div role="status" className="fl-notice">{notice}</div>}
+  <p><Link to={`/requests?type=${category}`}>Lập yêu cầu {formCategories[category].toLowerCase()} để tự tạo phiếu</Link></p>
+  <AutomaticForms key={inputKey} category={category}/>
   {loading?<p role="status">Đang tải mẫu và phiếu...</p>:<>
   <section className="fl-section"><div className="fl-section-title"><h2>01 / Mẫu {formCategories[category].toLowerCase()}</h2><span>PDF · Word · Excel</span></div>
    <div className="fl-templates">{templates.filter(t=>t.category===category).map(t=><article className="fl-template" key={t.id}>

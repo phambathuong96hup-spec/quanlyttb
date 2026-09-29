@@ -1,3 +1,4 @@
+import { COMPLIANCE_WARNING_DAYS } from '../utils/compliancePolicy.ts';
 import { useToast } from '../components/ui/Toast';
 import React, { useState } from 'react';
 import {
@@ -79,23 +80,15 @@ const Dashboard: React.FC = () => {
     const docs = (d.documents || []).filter(doc => !isArchivedDocumentStatus(doc.status));
     if (docs.length > 0) {
       let bestDeadline: Date | null = null;
-      let bestPrepDays = 45;
+      const bestPrepDays = COMPLIANCE_WARNING_DAYS;
       let bestDocType = '';
-
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
 
       for (const doc of docs) {
         const parsed = parseVietnameseDate(doc.expiryDate);
         if (parsed) {
-          const diffDeadline = Math.ceil((parsed.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-          const submitted = doc.status === 'Đã gửi' || doc.status === 'Đã phê duyệt';
-          if (submitted && diffDeadline >= 0) continue;
 
           if (!bestDeadline || parsed.getTime() < bestDeadline.getTime()) {
             bestDeadline = parsed;
-            const match = String(doc.prepTime || '').match(/\d+/);
-            bestPrepDays = match ? parseInt(match[0], 10) : 45;
             bestDocType = doc.docType;
           }
         }
@@ -115,21 +108,16 @@ const Dashboard: React.FC = () => {
         } else if (diffStart <= 0) {
           warningLevel = 'danger';
           alertText = `Tới hạn chuẩn bị hồ sơ ${bestDocType} (còn ${diffDeadline} ngày)`;
-        } else if (diffStart <= 5) {
-          warningLevel = 'warning';
-          alertText = `Còn ${diffStart} ngày bắt đầu làm hồ sơ ${bestDocType}`;
         }
-        daysRemaining = diffStart <= 5 ? diffStart : diffDeadline;
+        daysRemaining = diffDeadline;
         urgentDocType = bestDocType;
       }
     } else {
       // Tương thích ngược với dữ liệu cũ (không có documents[])
       const deadlineStr = String(d['Thời hạn cấp lại/ Hạn đăng kiểm'] || d['Ngày bảo dưỡng tiếp theo'] || '');
-      const prepDaysStr = String(d['Thời gian  chuẩn bị Hồ sơ'] || d['Thời gian chuẩn bị Hồ sơ'] || '');
       const parsedDeadline = parseVietnameseDate(deadlineStr);
       if (parsedDeadline) {
-        const match = prepDaysStr.match(/\d+/);
-        const prepDays = match ? parseInt(match[0], 10) : 45;
+        const prepDays = COMPLIANCE_WARNING_DAYS;
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         const deadlineTime = parsedDeadline.getTime();
@@ -143,19 +131,11 @@ const Dashboard: React.FC = () => {
         } else if (diffStart <= 0) {
           warningLevel = 'danger';
           alertText = `Tới hạn chuẩn bị hồ sơ (còn ${diffDeadline} ngày đăng kiểm)`;
-        } else if (diffStart <= 5) {
-          warningLevel = 'warning';
-          alertText = `Còn ${diffStart} ngày bắt đầu làm hồ sơ`;
         }
-        daysRemaining = diffStart <= 5 ? diffStart : diffDeadline;
+        daysRemaining = diffDeadline;
       }
     }
 
-    const docStatus = d['Trạng thái Hồ sơ'] || '';
-    if (docStatus === 'Đã gửi' && warningLevel !== 'safe' && warningLevel !== 'critical') {
-      warningLevel = 'success';
-      alertText = 'Đã gửi hồ sơ';
-    }
 
     const deadlineStr2 = String(d['Thời hạn cấp lại/ Hạn đăng kiểm'] || d['Hạn đăng kiểm'] || '');
     const parsedDeadline2 = parseVietnameseDate(deadlineStr2);

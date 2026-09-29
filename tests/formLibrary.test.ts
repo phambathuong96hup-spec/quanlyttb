@@ -2,6 +2,21 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
+
+test('form vault accepts folder IDs or Drive folder links without forwarding URL parameters',()=>{
+ const c=vm.createContext({console});vm.runInContext(readFileSync('gas/Code.gs','utf8'),c);
+ const id='15DCMMm9RlpBhTJNXcGEDyAP1beP0bWTE';let value=id;let accessed='';let checked=0;
+ c.PropertiesService={getScriptProperties:()=>({getProperty:()=>value})};
+ const folder={};c.DriveApp={getFolderById:(input:string)=>{accessed=input;return folder;}};
+ c.assertFormVaultPrivate_=(input:unknown)=>{assert.equal(input,folder);checked++;};
+ for(const input of [id,`${id}?hl=vi`,` https://drive.google.com/drive/folders/${id}?hl=vi `,`https://drive.google.com/drive/u/0/folders/${id}#view`]) {
+  value=input;c.formVaultFolder_();assert.equal(accessed,id);
+ }
+ assert.equal(checked,4);
+ for(const input of ['',`https://evil.example/folders/${id}`,`https://drive.google.com/file/d/${id}/view`,'bad id']) {
+  value=input;accessed='';assert.throws(()=>c.formVaultFolder_());assert.equal(accessed,'');
+ }
+});
 function harness() {
  const c=vm.createContext({console}); vm.runInContext(readFileSync('gas/Code.gs','utf8'),c);
  const rows: Record<string, Record<string,unknown>[]>={FormTemplates:[],SubmittedForms:[]};

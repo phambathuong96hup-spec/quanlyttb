@@ -6,6 +6,8 @@ import vm from 'node:vm';
 function createGasContext() {
   const gas = readFileSync('gas/Code.gs', 'utf8');
   const baseContext: Record<string, unknown> = {
+    Session: {getScriptTimeZone: () => 'Asia/Bangkok'},
+    PropertiesService: {getScriptProperties: () => ({getProperty: () => null})},
     console: { ...console },
     SpreadsheetApp: {
       openById: () => ({
@@ -24,6 +26,7 @@ function createGasContext() {
       flush: () => {}
     },
     Utilities: {
+      formatDate: () => '28/09/2026',
       getUuid: () => 'uuid-mock-' + Math.random().toString(36).slice(2, 9),
       computeDigest: (_alg: unknown, val: string) => {
         const bytes = [];
@@ -46,6 +49,7 @@ function createGasContext() {
 
   const context = vm.createContext(baseContext);
   vm.runInContext(gas, context);
+  context.findDeviceById_ = () => ({id:'TEST', 'Tên Thiết bị':'Thiết bị thử'});
   return context;
 }
 
